@@ -1,0 +1,203 @@
+================================================================
+PINNED OBJECTIVE
+Extract what 10 successful traders collectively know, then build
+ONE executable NQ strategy that preserves their ideas.
+
+TRADINGVIEW v1 — IMPLEMENTATION MAP, PARITY KIT, AND VERDICT
+Package contents: ORB_S5b_v1.pine (source), this document,
+parity_reference_orb_2016_2026.csv (2,295 expected trades with
+signal/entry/exit timestamps and prices from the verified
+engine), parity_reference_s5b_states_2016_2026.csv (2,705 days
+of expected S5b state timestamps), parity_check.py (automated
+trade-list diff), S5b 12-day spot-check list (Section 6).
+Nothing in the Pine reinterprets a rule. No optimization.
+================================================================
+
+1. PLAIN-ENGLISH IMPLEMENTATION MAP
+
+Chart: 5-minute, NQ1! (or MNQ1!), timezone-independent — every
+rule is computed on the America/New_York clock inside the
+script.
+
+MODULE A (the only thing that trades):
+- 09:30–09:44:59 NY builds the 15-min opening range from the
+  three 5m bars opening 09:30/09:35/09:40.
+- From 09:45 through the 10:30 bar inclusive, the FIRST 5m bar
+  that CLOSES beyond the OR with body ≥ 50% of its range sets
+  the direction. First qualified direction wins; one trade/day.
+- Entry: next 5m bar open (Pine's native next-bar market fill —
+  process_orders_on_close is OFF, so the order placed at signal
+  close fills at the next open, exactly like the research
+  engine).
+- Stop: opposite OR extreme, submitted as the ONLY intrabar
+  order. Because it is the only intrabar order, TradingView's
+  intrabar path assumptions cannot differ from the research
+  engine's 1m touch logic — a bar either crosses the stop or it
+  doesn't.
+- Impossible-fill guard: if the fill lands beyond the stop
+  (gap), the position is voided at once and tagged VOID_GAP —
+  never booked as a win. (In 2,295 research trades this never
+  occurred on 5m NQ; the guard exists for honesty.)
+- Exit: the bar opening 15:55 closes the position AT ITS CLOSE
+  (strategy.close immediately=true) = 16:00 NY, which equals
+  the research engine's 15:59 1m close price.
+
+MODULE B (classifier — zero orders):
+- Opening balance = first six 5m bars (09:30–09:59).
+- From the 10:00 bar: first CLOSE beyond OBH/OBL latches
+  direction. Leg tracked exactly as researched (session-running
+  extreme on the with side; anchor frozen at latch on the other).
+- Pullback band 25–75% of the leg; >100% retrace = INVALIDATED
+  (display state only — Round 3 proved this event is already
+  owned by the ORB stop; v1 takes NO action on it).
+- Failure = two consecutive bars with no new pullback progress
+  (1-pt tolerance). Reassertion = close through prior bar's
+  extreme, directional body, volume ≥ 1.2 × the WITHIN-DAY
+  rolling 12-bar average (min 6 observations — computed from an
+  intraday array, NOT ta.sma, which would leak across sessions).
+- The ≥5-pt risk floor is checked at the NEXT bar's open, so the
+  CONFIRMED timestamp in Pine equals the research engine's
+  confirmation timestamp (which is also next-bar).
+- No new state progress after the 11:30 bar (a confirmation
+  signaled on the 11:30 bar may finalize at 11:35, matching the
+  engine).
+
+MODULE C: ALIGNED / DISAGREEMENT / UNRESOLVED, computed only
+after both states exist. S5b never touches the ORB entry —
+enforced structurally: Module A executes without reading any
+Module B variable.
+
+2. STATE MACHINE (text table)
+
+ state  name                      entered when                      exits to
+ 0      WAITING                   session start                     1 (latch), stays 0
+ 1      DIRECTION LATCHED         first 5m close beyond OBH/OBL     2, -9
+ 2      PULLBACK ACTIVE           retrace 25–75% of leg             3, -9
+ 3      COUNTERATTACK FAILING     2-bar no-progress inside band     4*, -9
+ 4      S5b CONFIRMED             reassertion close + volume,       terminal (day)
+                                  finalized next open if risk ≥5
+ -9     INVALIDATED               retrace > 100% of leg             terminal (day)
+ (*state 3→4 may take multiple attempts; a failed risk floor
+  returns to scanning, exactly like the engine)
+
+3. ALERT / EVENT SPECIFICATION
+Events (alert() JSON, once per bar close):
+ ORB_LONG_ENTRY / ORB_SHORT_ENTRY  — at signal close; entry
+   executes next open, payload carries signal close + stop
+ S5B_LONG_CONFIRMED / S5B_SHORT_CONFIRMED — at finalize bar
+ ORB_STOP — bar on which the stop was crossed
+ SESSION_CLOSE_EXIT — 15:55 bar
+Payload fields: ver, sym, ts (NY), event, dir, entry, stop, orH,
+orL, s5state, s5dir, align, id (sym_yyyymmdd_event). Simple
+alertcondition() hooks are also exposed for the 4 entry/confirm
+events. No credentials anywhere in Pine; automation consumes the
+JSON via webhook when we get to paper wiring.
+
+4. TRADINGVIEW SETUP
+1. Chart: CME_MINI:NQ1!, 5-minute. Chart timezone irrelevant.
+2. IMPORTANT — data settings: continuous contract NQ1! defaults
+   to UNADJUSTED. For price-level parity vs the research
+   (back-adjusted) either enable "Adjust for contract changes"
+   in symbol settings, or accept that historical PRICES differ
+   by the roll offset while DATES/TIMES/DIRECTIONS still match
+   (intraday-relative rules are offset-invariant within a day).
+3. Extended or regular hours both work — the script gates
+   everything by NY clock. RTH chart recommended (cleaner).
+4. Add strategy → Strategy Tester → Export "List of Trades" CSV
+   for the parity run.
+5. Alerts: create one alert on the strategy, "Any alert()
+   function call", webhook optional for paper automation later.
+
+5. ORB PARITY — PROCEDURE AND EXPECTED RESULT
+This chat cannot execute Pine; parity is a one-export job on
+your side, and the reference plus the checker are in this
+package so either AI can grade it mechanically.
+
+a) Export the TradingView List of Trades CSV (as deep as your
+   plan's 5m history goes — note TV intraday history is limited;
+   expect roughly 2011+ at best, and treat whatever window TV
+   serves as the parity window).
+b) Run: python parity_check.py <tv_export.csv>
+   It matches by date against
+   parity_reference_orb_2016_2026.csv and buckets every
+   mismatch: MISSING_DAY / EXTRA_DAY / DIRECTION / ENTRY_TIME /
+   ENTRY_PRICE / STOP / EXIT_TIME / EXIT_PRICE, with tolerance
+   inputs for the price-offset case (unadjusted feed).
+c) Anchors for a 60-second eyeball before the full run — the
+   reference's bookends: first trade 2016-01-04 and the totals
+   2,295 trades / 216-227 per full year (per-year counts are in
+   the reference CSV).
+Accept nothing short of trade-list parity on days where TV data
+exists; category-coded mismatches come back to me and I resolve
+them — the strategy itself does not change.
+
+6. S5b SPOT-CHECK — 12 PREREGISTERED DAYS
+Load each day on the chart and compare the on-chart state labels
+to the engine's expected timestamps (all NY, 5m bar opens;
+CONFIRMED timestamp = finalize bar):
+ CONFIRMED    2016-01-13  latch 10:10 ▼  confirm 10:35  (entry 7070.50 / stop 7102.50)
+ CONFIRMED    2018-06-18  latch 10:20 ▲  confirm 10:40  (9953.25 / 9929.50)
+ CONFIRMED    2022-07-22  latch 10:05 ▼  confirm 11:25  (15083.50 / 15205.50)
+ CONFIRMED    2026-06-16  latch 10:15 ▼  confirm 10:25  (30713.00 / 30891.00)
+ INVALIDATED  2016-01-25  latch 10:00 ▲  invalid 11:10
+ INVALIDATED  2021-03-30  latch 10:15 ▼  invalid 11:30
+ INVALIDATED  2026-06-22  latch 10:05 ▲  invalid 10:25
+ LATCH-ONLY   2016-02-11  latch 11:30 ▼   (never enters band)
+ LATCH-ONLY   2021-03-16  latch 10:00 ▲
+ LATCH-ONLY   2026-06-15  latch 11:00 ▲
+ NO-LATCH     2016-01-15  (no 5m close beyond OB through 11:30)
+ NO-LATCH     2026-06-25  (same)
+Prices are back-adjusted research values — on an unadjusted
+feed, expect the same TIMESTAMPS with offset prices except on
+the current contract (2026 rows), where prices should match to
+the tick. The full 2,705-day state reference is in the CSV for
+deeper sampling. The volume-dependent CONFIRMED rows are the
+ones most at risk from feed differences (Section 7, item 4).
+
+7. UNAVOIDABLE TV-vs-FIRSTRATE DISCREPANCIES (known in advance)
+1) Back-adjustment: TV continuous defaults unadjusted; research
+   is adjusted. Dates/times/directions invariant intraday;
+   historical price levels differ by the roll offset.
+2) Intraday history depth: TV 5m history is plan-limited and
+   far shorter than 2008; the parity window is whatever TV
+   serves, and the 2016–2026 reference covers the realistic
+   maximum.
+3) Session template: TV's futures RTH runs to 16:15 NY; the
+   research day ends 16:00. The script clock-gates to
+   09:30–16:00, so the 16:00–16:15 tail is ignored (flat by
+   then). Exit price = 16:00 close = research 15:59 1m close.
+4) VOLUME FEED — the one that matters: TV's futures volume can
+   differ from FirstRate's. ORB parity is immune (no volume
+   rule). S5b CONFIRMED is volume-gated (1.2× within-day
+   average), so borderline confirmations can flip on a
+   different feed. This is why the spot-check includes four
+   CONFIRMED days; if those four match, the classifier is
+   feed-robust enough for display/alert duty.
+5) Half-days: the research excluded sessions with <200 1m bars;
+   Pine trades any day with a complete OR. Expect a handful of
+   holiday-eve count differences — the checker buckets them as
+   MISSING/EXTRA days.
+6) Roll dates: TV's roll convention may differ from FirstRate's
+   by a day; intraday logic is unaffected, but the specific
+   contract quoted on a roll day can shift OR levels slightly
+   vs the research series.
+
+8. PAPER-AUTOMATION READINESS — RECOMMENDATION
+CONDITIONAL YES. The implementation is faithful, order-complete,
+and alert-instrumented, and nothing in it can retroactively
+filter the ORB entry. But per your own rule — do not accept
+approximate similarity — it is NOT signed off until the two
+gates on your side run: (1) the ORB List-of-Trades export
+passes parity_check.py on the overlapping window with only
+category-3/5/6-class discrepancies, and (2) the 12-day S5b
+spot-check matches, especially the four CONFIRMED timestamps.
+Pass both → wire the alert webhook to the paper executor and
+start the forward ledger. Fail either → mismatches come back to
+me by category and I fix the implementation, never the strategy.
+
+WHAT v1 DELIBERATELY DOES NOT DO (per the freeze): no add or
+resize at S5b confirmation, no exit on disagreement, no NO-LATCH
+action, no trailing, no VWAP/EMA/ATR, no prop rules, no live
+money. Direction-agreement sizing stays PARKED as its own future
+preregistered test.
+================================================================

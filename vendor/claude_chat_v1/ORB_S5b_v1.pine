@@ -1,0 +1,279 @@
+//@version=6
+// ============================================================================
+// NQ ORB + S5b COLLECTIVE CLASSIFIER — v1.0  (frozen architecture, Aug 16 2026)
+// Module A: verified Samir ORB entry engine (parity target: 2016–Jun 2026,
+//           2,295 trades, +122.8R, PF 1.11 on FirstRate adjusted 1m research data)
+// Module B: S5b / Failed-Counterattack ten-trader classifier (display + alerts ONLY)
+// Module C: ORB↔S5b relationship states
+// Management: hard stop + hold to RTH close. ONE trade/day. No other exit.
+// RUN THIS ON A 5-MINUTE CHART, symbol NQ1! or MNQ1! (see setup instructions).
+// ============================================================================
+strategy("NQ ORB + S5b Classifier v1.0", shorttitle="ORB+S5b v1",
+     overlay=true, pyramiding=0,
+     initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.0,
+     slippage=0,
+     calc_on_every_tick=false, process_orders_on_close=false,
+     max_labels_count=500)
+
+// ---------------- frozen constants (inputs shown for transparency; DO NOT tune) ----
+const string TZ  = "America/New_York"
+const string VER = "ORB_S5B_v1.0"
+tolPts  = input.float(1.0, "S5b failure tolerance, pts [FROZEN]")
+volMult = input.float(1.2, "S5b relative-volume multiplier [FROZEN]")
+minRisk = input.float(5.0, "S5b minimum risk, pts [FROZEN]")
+showOB  = input.bool(true,  "Show S5b 30-min opening balance")
+showLbl = input.bool(true,  "Show S5b state-change labels")
+
+// ---------------- NY clock ----------------
+hm      = hour(time, TZ) * 100 + minute(time, TZ)
+dayKey  = timestamp(TZ, year(time, TZ), month(time, TZ), dayofmonth(time, TZ), 0, 0)
+isNewDay = ta.change(dayKey) != 0
+inRTH    = hm >= 930 and hm <= 1555          // 5m bar OPEN times processed
+isEODbar = hm == 1555                         // bar closing at 16:00 NY
+
+// ---------------- per-day state ----------------
+var float orH = na
+var float orL = na
+var float obH = na
+var float obL = na
+var int   obCnt = 0
+var bool  tradedToday = false
+var int   orbDir = 0                 // +1 long, -1 short, 0 none (today)
+var float orbStop = na
+var float dayLo = na
+var float dayHi = na
+var int   barsToday = 0
+// S5b machine
+var int   s5state = 0                // 0 wait latch, 1 latched, 2 pullback, 3 failing, 4 confirmed, -9 invalidated
+var int   s5dir = 0                  // +1 / -1 / 0
+var float legLo = na
+var float legHi = na
+var bool  s5pending = false          // confirmation signal fired; finalize at next bar open (risk check)
+var float s5pStop = na
+var int   s5pDir = 0
+var float s5Entry = na
+var float s5Stop = na
+var array<float> dayVol = array.new<float>()
+
+if isNewDay
+    orH := na
+    orL := na
+    obH := na
+    obL := na
+    obCnt := 0
+    tradedToday := false
+    orbDir := 0
+    orbStop := na
+    dayLo := na
+    dayHi := na
+    barsToday := 0
+    s5state := 0
+    s5dir := 0
+    legLo := na
+    legHi := na
+    s5pending := false
+    s5pStop := na
+    s5pDir := 0
+    s5Entry := na
+    s5Stop := na
+    array.clear(dayVol)
+
+// ---------------- session tracking ----------------
+if inRTH
+    barsToday += 1
+    dayLo := na(dayLo) ? low  : math.min(dayLo, low)
+    dayHi := na(dayHi) ? high : math.max(dayHi, high)
+    array.push(dayVol, volume)
+    // 15-min opening range: bars opening 09:30 / 09:35 / 09:40
+    if hm >= 930 and hm <= 940
+        orH := na(orH) ? high : math.max(orH, high)
+        orL := na(orL) ? low  : math.min(orL, low)
+    // 30-min S5b opening balance: first six bars 09:30–09:55
+    if obCnt < 6
+        obH := na(obH) ? high : math.max(obH, high)
+        obL := na(obL) ? low  : math.min(obL, low)
+        obCnt += 1
+
+// within-day rolling volume average: last <=12 of TODAY's bars incl. current, min 6
+f_dayVolAvg() =>
+    n = array.size(dayVol)
+    if n < 6
+        [float(na), n]
+    else
+        k = math.min(12, n)
+        s = 0.0
+        for i = n - k to n - 1
+            s += array.get(dayVol, i)
+        [s / k, n]
+
+// ============================================================================
+// MODULE B — S5b CLASSIFIER (evaluated BEFORE Module A each bar; display only)
+// ============================================================================
+bool s5ConfirmEvent = false          // fires on the FINALIZE bar (confirmation timestamp)
+[vavg, nVol] = f_dayVolAvg()
+
+// finalize a pending confirmation at THIS bar's open (matches research: re_ts = next-bar ts)
+if inRTH and s5pending
+    riskOK = s5pDir == 1 ? (open - s5pStop >= minRisk) : (s5pStop - open >= minRisk)
+    if riskOK
+        s5state := 4
+        s5Entry := open
+        s5Stop  := s5pStop
+        s5ConfirmEvent := true
+    // riskOK false → keep scanning (state unchanged), exactly like the research engine
+    s5pending := false
+
+bool s5scan = inRTH and hm >= 1000 and hm <= 1130 and s5state != 4 and s5state != -9 and barsToday >= 7
+if s5scan
+    if s5state == 0
+        if close > obH
+            s5state := 1
+            s5dir := 1
+            legLo := dayLo
+        else if close < obL
+            s5state := 1
+            s5dir := -1
+            legHi := dayHi
+    else
+        // update leg + evaluate pullback / failure / reassertion
+        if s5dir == 1
+            legHi := dayHi
+            leg = legHi - legLo
+            if leg > 0
+                frac = (legHi - low) / leg
+                if frac > 1.0
+                    s5state := -9
+                else
+                    inBand = frac >= 0.25 and frac <= 0.75
+                    if inBand and s5state < 2
+                        s5state := 2
+                    fail = low >= low[1] - tolPts and low[1] >= low[2] - tolPts
+                    if inBand and fail and s5state < 3
+                        s5state := 3
+                    volOK = not na(vavg) and volume >= volMult * vavg
+                    if inBand and fail and close > high[1] and close > open and volOK
+                        s5pending := true
+                        s5pDir := 1
+                        s5pStop := ta.lowest(low, 7) - 2.0
+        if s5dir == -1
+            legLo := dayLo
+            leg = legHi - legLo
+            if leg > 0
+                frac = (high - legLo) / leg
+                if frac > 1.0
+                    s5state := -9
+                else
+                    inBand = frac >= 0.25 and frac <= 0.75
+                    if inBand and s5state < 2
+                        s5state := 2
+                    fail = high <= high[1] + tolPts and high[1] <= high[2] + tolPts
+                    if inBand and fail and s5state < 3
+                        s5state := 3
+                    volOK = not na(vavg) and volume >= volMult * vavg
+                    if inBand and fail and close < low[1] and close < open and volOK
+                        s5pending := true
+                        s5pDir := -1
+                        s5pStop := ta.highest(high, 7) + 2.0
+
+// ============================================================================
+// MODULE A — SAMIR ORB ENTRY ENGINE (the only trade creator)
+// ============================================================================
+bool orbLongSig  = false
+bool orbShortSig = false
+orComplete = not na(orH) and not na(orL) and hm >= 945
+inORBwin   = hm >= 945 and hm <= 1030
+bodyFrac   = (high - low) > 0 ? math.abs(close - open) / (high - low) : 0.0
+
+if inRTH and orComplete and inORBwin and not tradedToday
+    if bodyFrac >= 0.5 and close > orH
+        orbLongSig := true
+        orbDir := 1
+        orbStop := orL
+        tradedToday := true
+        strategy.entry("ORB", strategy.long, comment="ORB_L")
+    else if bodyFrac >= 0.5 and close < orL
+        orbShortSig := true
+        orbDir := -1
+        orbStop := orH
+        tradedToday := true
+        strategy.entry("ORB", strategy.short, comment="ORB_S")
+
+// impossible-fill guard: entry already beyond invalidation → VOID immediately (never book fake wins)
+bool voided = false
+if strategy.position_size > 0 and orbDir == 1 and strategy.position_avg_price <= orbStop
+    strategy.close("ORB", comment="VOID_GAP", immediately=true)
+    voided := true
+if strategy.position_size < 0 and orbDir == -1 and strategy.position_avg_price >= orbStop
+    strategy.close("ORB", comment="VOID_GAP", immediately=true)
+    voided := true
+
+// hard stop (the ONLY intrabar order) + session-close exit
+if strategy.position_size != 0 and not voided
+    strategy.exit("XS", from_entry="ORB", stop=orbStop, comment="ORB_STOP")
+if isEODbar and strategy.position_size != 0
+    strategy.close("ORB", comment="EOD", immediately=true)
+
+// ============================================================================
+// MODULE C — RELATIONSHIP
+// ============================================================================
+align = orbDir != 0 and s5state == 4 ? (s5dir == orbDir ? 1 : -1) : 0
+string alignTxt = align == 1 ? (orbDir == 1 ? "HIGH CONVICTION LONG" : "HIGH CONVICTION SHORT") : align == -1 ? "DISAGREEMENT" : "UNRESOLVED"
+
+// ============================================================================
+// VISUALS
+// ============================================================================
+plot(inRTH and orComplete ? orH : na, "OR High", color=color.new(color.teal, 0),  style=plot.style_linebr, linewidth=2)
+plot(inRTH and orComplete ? orL : na, "OR Low",  color=color.new(color.teal, 0),  style=plot.style_linebr, linewidth=2)
+plot(showOB and inRTH and obCnt >= 6 ? obH : na, "S5b OB High", color=color.new(color.gray, 40), style=plot.style_linebr)
+plot(showOB and inRTH and obCnt >= 6 ? obL : na, "S5b OB Low",  color=color.new(color.gray, 40), style=plot.style_linebr)
+plot(strategy.position_size != 0 ? orbStop : na, "Hard Stop", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+bgcolor(s5state == 4 and align == 1 ? color.new(color.green, 88) : s5state == -9 ? color.new(color.gray, 92) : na)
+
+string s5txt = s5state == 0 ? "WAITING" :
+     s5state == 1 ? "DIRECTION LATCHED " + (s5dir == 1 ? "▲" : "▼") :
+     s5state == 2 ? "PULLBACK ACTIVE" :
+     s5state == 3 ? "COUNTERATTACK FAILING" :
+     s5state == 4 ? "S5b CONFIRMED — HIGH CONVICTION " + (s5dir == 1 ? "▲" : "▼") :
+     "INVALIDATED"
+
+var table tbl = table.new(position.top_right, 1, 3, border_width=1)
+if barstate.islast or barstate.isrealtime
+    table.cell(tbl, 0, 0, "ORB: " + (orbDir == 1 ? "LONG" : orbDir == -1 ? "SHORT" : "—") + (strategy.position_size != 0 ? "  stop " + str.tostring(orbStop) : ""), bgcolor=color.new(color.blue, 80), text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 1, "S5b: " + s5txt, bgcolor=s5state == 4 ? color.new(color.green, 60) : color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 2, alignTxt, bgcolor=align == 1 ? color.new(color.green, 30) : align == -1 ? color.new(color.orange, 50) : color.new(color.gray, 85), text_color=color.white, text_size=size.normal)
+
+if showLbl and s5state != s5state[1] and inRTH
+    label.new(bar_index, high, s5txt, style=label.style_label_down, size=size.tiny,
+         color=s5state == 4 ? color.new(color.green, 20) : s5state == -9 ? color.new(color.gray, 40) : color.new(color.silver, 60),
+         textcolor=color.black)
+
+// ============================================================================
+// ALERTS — deterministic events with JSON payload (freq: once per bar close)
+// ============================================================================
+f_id(ev) => syminfo.ticker + "_" + str.format_time(time, "yyyyMMdd", TZ) + "_" + ev
+f_json(ev, dir, ent, stp) =>
+    '{"ver":"' + VER + '","sym":"' + syminfo.ticker + '","ts":"' + str.format_time(time_close, "yyyy-MM-dd HH:mm", TZ) +
+     '","event":"' + ev + '","dir":"' + dir + '","entry":' + str.tostring(ent) + ',"stop":' + str.tostring(stp) +
+     ',"orH":' + str.tostring(orH) + ',"orL":' + str.tostring(orL) +
+     ',"s5state":' + str.tostring(s5state) + ',"s5dir":' + str.tostring(s5dir) +
+     ',"align":"' + alignTxt + '","id":"' + f_id(ev) + '"}'
+
+if orbLongSig
+    alert(f_json("ORB_LONG_ENTRY", "LONG", close, orbStop), alert.freq_once_per_bar_close)
+if orbShortSig
+    alert(f_json("ORB_SHORT_ENTRY", "SHORT", close, orbStop), alert.freq_once_per_bar_close)
+if s5ConfirmEvent
+    alert(f_json(s5dir == 1 ? "S5B_LONG_CONFIRMED" : "S5B_SHORT_CONFIRMED", s5dir == 1 ? "LONG" : "SHORT", s5Entry, s5Stop), alert.freq_once_per_bar_close)
+bool stoppedThisBar = strategy.position_size == 0 and strategy.position_size[1] != 0 and not isEODbar and not voided and ((strategy.position_size[1] > 0 and low <= orbStop) or (strategy.position_size[1] < 0 and high >= orbStop))
+if stoppedThisBar
+    alert(f_json("ORB_STOP", orbDir == 1 ? "LONG" : "SHORT", strategy.position_avg_price, orbStop), alert.freq_once_per_bar_close)
+if isEODbar and strategy.position_size[1] != 0
+    alert(f_json("SESSION_CLOSE_EXIT", orbDir == 1 ? "LONG" : "SHORT", na, orbStop), alert.freq_once_per_bar_close)
+
+// simple UI-selectable alert hooks (no payload)
+alertcondition(orbLongSig,  "ORB_LONG_ENTRY",  "ORB long signal (enter next 5m open)")
+alertcondition(orbShortSig, "ORB_SHORT_ENTRY", "ORB short signal (enter next 5m open)")
+alertcondition(s5ConfirmEvent and s5dir == 1,  "S5B_LONG_CONFIRMED",  "S5b confirmed long — high conviction")
+alertcondition(s5ConfirmEvent and s5dir == -1, "S5B_SHORT_CONFIRMED", "S5b confirmed short — high conviction")

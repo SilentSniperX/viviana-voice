@@ -84,7 +84,18 @@ invalidated sessions into the band / no-band buckets rather than giving them
 their own state — both recorded in the script so the reading is not re-derived
 by hand later.
 
-### 1.7 The comparators are themselves tested
+### 1.7 A fourth, independently produced ORB reference agrees
+
+`vendor/claude_chat_v1/parity_reference_orb_2016_2026.csv` (Claude Chat's
+TradingView package) agrees with the canonical list on **2,295/2,295 sessions**
+across direction, signal bar, entry bar, entry price, stop and exit price. Its
+S5b state file agrees with the validated research flags on **2,705/2,705
+sessions**, and its 12 preregistered spot-check dates are 12/12 consistent.
+
+Its exit timestamps are 1-minute resolution rather than 5-minute — harmless as
+data, fatal to its own checker (see `vendor/claude_chat_v1/AUDIT.md` C-1).
+
+### 1.8 The comparators are themselves tested
 
 `tests/parity_orb.py` was run against the canonical list (4,022/4,022 exact) and
 against a deliberately perturbed copy carrying one instance of each mismatch
@@ -98,6 +109,14 @@ the reference flags: **4,768 sessions, 0 mismatches**, including all 763
 published confirmation timestamps from `claude_s5b_hist_2008_2023.csv`. Injected
 faults (a flipped latch direction and a corrupted confirmation timestamp) were
 each detected.
+
+`tests/parity_tv_list_of_trades.py` (the replacement for the vendor checker) was
+run on three synthetic exports: a correct 5-minute implementation
+(**2,295/2,295 PASS**), an export with randomised entry prices and every exit
+price shifted +999 (**0/2,295, blocked**), and a genuine two-era roll offset of
++137/+402 applied to every leg (**2,295/2,295 PASS, exactly 2 offset levels
+detected**). The vendor checker scores the first of those 234/2,295 FAIL and the
+second PARITY PASS.
 
 ---
 
@@ -154,6 +173,7 @@ source, never absorbed by a tolerance.
 | mismatch taxonomy tooling exists and is tested | **PASS** |
 | S5b reference file validated against published results | **PASS** — 12/12 published PFs reproduced |
 | S5b state comparator exists and is tested | **PASS** — 4,768 sessions, 0 mismatches on the control |
+| third-party TradingView package audited | **PASS** — reference data accepted, `ORB_S5b_v1.pine` rejected (15 defects), `parity_check.py` superseded |
 | no dead or parked rule implemented (spec G) | **PASS** — only exits are the ORB stop and the RTH close |
 | no-lookahead / no repainting | **PASS by construction** — completed-bar state only, `calc_on_every_tick=false`, S5b never read by the ORB path; to be re-verified on a live chart at 1.7 |
 | Pine-vs-canonical trade-list parity | **NOT RUN** — blocked, see §2 |

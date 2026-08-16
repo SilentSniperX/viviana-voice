@@ -354,6 +354,12 @@ def test_s5b_short_mirror() -> None:
 
 
 def test_s5b_entry_deadline() -> None:
+    """The 11:30 cap applies to standalone ENTRIES, not to the state machine.
+
+    tmp_s5b_round3c.py::s5b_day scans every session bar; only `standalone()`
+    caps at 11:30. Capping the classifier itself would silently drop late
+    confirmations that the research flag files do record.
+    """
     ob = s5b_opening_balance()
     pad = tail("10:00", 96, "11:25")
     seq = [
@@ -364,9 +370,47 @@ def test_s5b_entry_deadline() -> None:
         bar("11:50", 104.5, 108, 104, 107, 5000),
     ]
     s = s5b_day(ob + pad + seq + tail("11:55", 107))
-    check("C: confirmation after the 11:30 bar is not entry-eligible",
-          s["state"] != S5B_CONFIRMED or s["entry_eligible"] is False,
-          f"{s['state']} {s['confirmed_ts']}")
+    check("C: the state machine still reaches CONFIRMED after 11:30",
+          s["state"] == S5B_CONFIRMED, f"{s['state']} {s['confirmed_ts']}")
+    check("C: a confirmation after the 11:30 bar is not entry-eligible",
+          s["entry_eligible"] is False)
+
+
+def test_s5b_band_is_sticky_once_activated() -> None:
+    """Failure and reassertion are evaluated after the pullback opens, without
+    re-testing the retracement band on those later bars.
+
+    The reference sets a sticky `pull` flag; re-requiring the band on the
+    reassertion bar suppresses confirmations, because a strong reassertion bar
+    has a shallow retracement by construction.
+    """
+    ob = s5b_opening_balance()
+    seq = [
+        bar("10:00", 96, 110, 95, 109),          # latch long, leg 90 -> 110
+        bar("10:05", 109, 110, 104, 105),        # retr 0.30 -> pullback opens
+        bar("10:10", 105, 106, 103.5, 104),
+        bar("10:15", 104, 105, 103.2, 104.5),
+        # Reassertion bar: low 108 -> retr = (110-108)/20 = 0.10, OUTSIDE the band.
+        bar("10:20", 108.5, 112, 108, 111.5, 5000),
+    ]
+    s = s5b_day(ob + seq + tail("10:25", 111))
+    check("C: confirmation does not require the reassertion bar to be in the band",
+          s["state"] == S5B_CONFIRMED, f"{s['state']}")
+
+
+def test_s5b_failure_needs_two_bars_after_pullback() -> None:
+    """`j - pull_start_j >= 2` in the reference: the bar that opens the pullback
+    cannot itself complete the failure and the reassertion."""
+    ob = s5b_opening_balance()
+    seq = [
+        bar("10:00", 96, 110, 95, 109),
+        # This single bar is in the band AND closes above the prior high with a
+        # directional body and heavy volume. The reference cannot confirm here.
+        bar("10:05", 104, 110, 104, 109.5, 9000),
+    ]
+    s = s5b_day(ob + seq + tail("10:10", 109))
+    check("C: the pullback bar itself cannot complete the sequence",
+          s["state"] != S5B_CONFIRMED, f"{s['state']}")
 
 
 def test_s5b_needs_six_ob_bars() -> None:

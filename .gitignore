@@ -6,3 +6,10 @@ __pycache__/
 .venv/
 venv/
 node_modules/
+
+# generated parity reports (re-created by the checkers)
+tests/parity_report_tv_trades.md
+tests/parity_report_s5b.md
+tests/parity_report_selfcheck.md
+tests/parity_report_python.md
+tests/parity_report_tradingview.md

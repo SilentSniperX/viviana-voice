@@ -199,7 +199,7 @@ if pendingEntry and barstate.isconfirmed
             pendingEntry := false
             daySettled   := true
             strategy.cancel_all()
-            strategy.close_all(comment = "ORB_SKIPPED")
+            strategy.close_all(comment = "ORB_SKIPPED", immediately = true)
         else
             entryPx      := candidateEntry
             stopPx       := candidateStop
@@ -212,7 +212,7 @@ if pendingEntry and barstate.isconfirmed
         pendingEntry := false
         daySettled   := true
         strategy.cancel_all()
-        strategy.close_all(comment = "ORB_SKIPPED")
+        strategy.close_all(comment = "ORB_SKIPPED", immediately = true)
 
 // --- management: hard stop has priority, otherwise RTH close (B) --------------
 // The stop is live from the entry bar onward, including the entry bar itself
@@ -232,13 +232,13 @@ if barstate.isconfirmed and tradeTaken and not daySettled
         exitReason := "SESSION_CLOSE_EXIT"
         daySettled := true
 
-// B: "Otherwise exit at RTH close." TradingView fills this market order at the
-// open of the following bar (process_orders_on_close = false is required for
-// correct next-bar ENTRY semantics, which CLAUDE.md lists as DO-NOT-CHANGE).
-// The deterministic record above uses the final bar's CLOSE, which is the
-// canonical value; the strategy-tester fill is a known reporting seam.
+// B: "Otherwise exit at RTH close." `immediately = true` executes the order on
+// the current bar instead of the next bar's open, so the strategy tester books
+// the exit at the final bar's CLOSE — the canonical value — while
+// `process_orders_on_close` stays false to preserve next-bar ENTRY semantics.
+// Without it the tester would book this exit at the following session's open.
 if isSessionLast and inPosition
-    strategy.close_all(comment = "SESSION_CLOSE_EXIT")
+    strategy.close_all(comment = "SESSION_CLOSE_EXIT", immediately = true)
 
 // =============================================================================
 // SECTION C — S5b classifier (state only; never places an order in v1)
@@ -259,6 +259,7 @@ var int   failureTs  = na
 var int   confirmTs  = na
 var int   invalidTs  = na
 var bool  s5bDone    = false
+var bool  s5bEntryOk = false   // C: confirmation landed on/before the 11:30 bar
 var float sessHigh   = na
 var float sessLow    = na
 var float volSum     = 0.0
@@ -283,6 +284,7 @@ if isNewSession
     confirmTs    := na
     invalidTs    := na
     s5bDone      := false
+    s5bEntryOk   := false
     sessHigh     := na
     sessLow      := na
 
@@ -364,9 +366,19 @@ if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LA
                             s5bStateN := 3
                     if failCond and resume and pressure
                         // C.8: pullback + failure + reassertion => CONFIRMED.
+                        // Note the state machine has NO upper time bound: spec C's
+                        // 11:30 limit applies to standalone S5b ENTRIES, not to
+                        // the classifier, and the research flag files record
+                        // confirmations after 11:30. Capping the machine here
+                        // would silently drop them.
                         s5bStateN := 4
                         confirmTs := time
                         s5bDone   := true
+                        // C: "No standalone S5b entries after the 11:30 5m bar."
+                        // v1 takes no S5b entry, so this is state carried on the
+                        // alert, never an action. Mirrors `entry_eligible` in
+                        // tests/reference_engine.py::s5b_day.
+                        s5bEntryOk := nyMinute <= S5B_DEADLINE
 
 s5bStateStr = s5bStateN == 0 ? "WAITING_FOR_LATCH" :
               s5bStateN == 1 ? "LATCHED" :
@@ -407,6 +419,7 @@ f_payload(evt, dir, px, stp) =>
      ',"s5b_state":"'   + s5bStateStr + '"' +
      ',"s5b_direction":"' + s5bDirStr + '"' +
      ',"alignment":"'   + alignmentStr + '"' +
+     ',"s5b_entry_eligible":' + (s5bEntryOk ? "true" : "false") +
      ',"entry":'        + (na(px)  ? "null" : str.tostring(px)) +
      ',"stop":'         + (na(stp) ? "null" : str.tostring(stp)) +
      ',"or_high":'      + (na(orH) ? "null" : str.tostring(orH)) +
@@ -462,6 +475,7 @@ plot(obH,                                     "px_ob_high",   display = display.
 plot(obL,                                     "px_ob_low",    display = display.data_window)
 plot(alignmentStr == "ALIGNED" ? 1 : alignmentStr == "DISAGREEMENT" ? -1 : 0,
                                               "px_alignment", display = display.data_window)
+plot(s5bEntryOk ? 1 : 0,                      "px_s5b_entry_ok", display = display.data_window)
 
 // =============================================================================
 // SECTION E — visuals
