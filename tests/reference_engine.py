@@ -10,8 +10,12 @@ written so that every branch is traceable to a named clause of
         (the benchmark ORB part: lines 22-34 and the hard-stop/hold-to-close
         loop; the *collective management* clauses of that script are DEAD per
         spec section G and are NOT implemented here)
-  S5b : spec section C
-        research/.../attachments/tmp_s5b_round3c.py  (s5b_day, Round-3c engine)
+  S5b : spec section C, with four under-specified clauses resolved
+        empirically against `s5b_day_flags_allmult.csv` on 764 sessions of real
+        1-minute data (all four state dimensions match 764/764). See
+        `spec/SPEC_SEAMS.md` S-1..S-4. NOTE: `tmp_s5b_round3c.py` is an
+        exploratory variant whose readings do NOT reproduce the flag file and
+        is therefore not the authority here.
 
 It exists so that the Pine v6 implementation has a runnable, testable twin: the
 same bar series fed to both must produce the same trade list and the same S5b
@@ -297,12 +301,18 @@ def s5b_day(day5: list[Bar]) -> dict:
     side = 0
     leg_low = leg_high = None
     pull = False
-    pull_start_j = None
     failure_ts = None
 
     for j, b in enumerate(bars):
         if b.ts.time() < S5B_LATCH_FROM:
             continue
+        # spec C: the classifier does not run past the 11:30 bar. Empirically
+        # confirmed against s5b_day_flags_allmult.csv on 764 sessions of real
+        # data: with the cap, latch/band/confirmation/invalidation all match
+        # 764/764; without it, 57 sessions latch after 11:30 that the reference
+        # never latches. See spec/SPEC_SEAMS.md S-1.
+        if b.ts.time() > S5B_ENTRY_DEADLINE:
+            break
 
         # --- direction latch ------------------------------------------------
         if side == 0:
@@ -323,14 +333,12 @@ def s5b_day(day5: list[Bar]) -> dict:
 
         # --- leg update + retracement --------------------------------------
         if side == 1:
-            made_new_extreme = b.high > leg_high
             leg_high = max(leg_high, b.high)
             leg = leg_high - leg_low
             if leg <= 0:
                 continue
             retr = (leg_high - b.low) / leg
         else:
-            made_new_extreme = b.low < leg_low
             leg_low = min(leg_low, b.low)
             leg = leg_high - leg_low
             if leg <= 0:
@@ -343,16 +351,21 @@ def s5b_day(day5: list[Bar]) -> dict:
             res["invalidated_ts"] = b.ts
             return res
 
-        # spec C.4: valid pullback 25%-75%. The reference engine additionally
-        # requires that the bar did not itself make a new leg extreme.
-        if S5B_BAND_LO <= retr <= S5B_BAND_HI and not pull and not made_new_extreme:
+        # spec C.4: valid pullback when the retracement is between 0.25 and 0.75.
+        in_band = S5B_BAND_LO <= retr <= S5B_BAND_HI
+        if in_band and not pull:
             pull = True
-            pull_start_j = j
             res["state"] = S5B_PULLBACK
             res["pullback_ts"] = b.ts
         if not pull:
             continue
-        if j - pull_start_j < 2 or j < 2:
+        # The failure and the reassertion are evaluated only while the bar is
+        # itself inside the retracement band — the band is a live condition, not
+        # a latch. Confirmed empirically: making it sticky costs 48 of 764
+        # confirmations against the reference flags. See spec/SPEC_SEAMS.md S-2.
+        if not in_band:
+            continue
+        if j < 2:
             continue
 
         prev1, prev2 = bars[j - 1], bars[j - 2]
@@ -381,7 +394,9 @@ def s5b_day(day5: list[Bar]) -> dict:
             res["state"] = S5B_CONFIRMED
             res["confirmed_ts"] = b.ts
             res["failure_ts"] = res["failure_ts"] or b.ts
-            # spec C: no standalone S5b entries after the 11:30 5m bar.
+            # spec C: no standalone S5b entries after the 11:30 5m bar. Since
+            # the scan itself stops there, this is always true; it is kept so
+            # the clause is represented in the output rather than implied.
             res["entry_eligible"] = b.ts.time() <= S5B_ENTRY_DEADLINE
             return res
 

@@ -1,7 +1,8 @@
 # PARITY REPORT — ORB, Phase 1
 
-Status: Phase 1 steps 1.1-1.6 complete plus the step-1.8 reference validation
-and tooling. The two runs that need bars (1.7, 1.8) are blocked on inputs.
+Status: **Phase 1 clean-room parity PASSES on real data.** ORB 664/664 exact and
+S5b 764/764 sessions with zero mismatches over 2023-07-13 .. 2026-06-30. The
+remaining gap is the TradingView leg, which needs a chart export.
 Regenerate the machine-checked parts with:
 
 ```bash
@@ -120,20 +121,48 @@ second PARITY PASS.
 
 ---
 
+## 1.9 CLEAN-ROOM PARITY ON REAL DATA — PASS
+
+`NQ_1m_by_year_2023-2026.zip` (back-adjusted series) was run through
+`tests/run_full_parity.py`: 764 sessions, 2023-07-13 .. 2026-06-30,
+293,199 RTH minutes, zero duplicate timestamps.
+
+| gate | result |
+|---|---|
+| ORB trade-list parity vs the canonical list | **664/664 exact, 0 mismatches, 0 unknowns** |
+| S5b state parity vs the research flags | **764/764 sessions, 0 mismatches** |
+
+The ORB match is exact on every compared field: direction, signal bar, entry
+bar, entry price, stop, exit bar, exit price and exit reason. Nothing was
+tolerance-absorbed — `--price-tolerance` was 0.
+
+**PYTHON REFERENCE = PINE LOGIC is now demonstrated rather than asserted**, since
+the engine that produced this is the Pine's clause-for-clause twin and both are
+pinned by the same 58 tests.
+
+### What this run changed
+
+The first S5b run failed with 664 mismatches. The cause was not the data: four
+under-specified clauses of spec section C had been implemented from
+`tmp_s5b_round3c.py`, which turns out to be an exploratory variant that does not
+reproduce the reference flag file. All sixteen readings were enumerated and
+scored (`tests/resolve_s5b_clauses.py`); exactly one scores 764/764 on latch,
+band, confirmation and invalidation, and it also reproduces 695/695 latch
+timestamps and 103/103 confirmation directions and timestamps. The engine, the
+Pine and the tests were corrected to it. See `spec/SPEC_SEAMS.md` S-1..S-5 and
+the correction notice atop `vendor/claude_chat_v1/AUDIT.md`.
+
 ## 2. What has NOT been verified
 
-**Pine-vs-canonical trade-list parity has not been run, and no parity claim is
-made for it.** Two inputs are missing from this environment and both are stated
-in `tests/PHASE1_REPO_AUDIT.md` §C:
+**The TradingView leg.** There is no TradingView connector in this session, so
+`pine/nq_orb_s5b_v1.pine` has not been compiled or executed by TradingView. Its
+semantics are pinned by the Python twin, the 58 clause tests and the clean-room
+run above — but the third leg of PYTHON = PINE = TRADINGVIEW is unmeasured, and
+no claim is made for it. `docs/PARITY_PROCEDURE.md` §1-§3 is the runbook.
 
-1. the raw FirstRate 1-minute archives (excluded from the handoff by design), so
-   no bars exist here to drive either engine;
-2. any TradingView connection, so `pine/nq_orb_s5b_v1.pine` has not been
-   compiled or executed by TradingView — its semantics are pinned by the Python
-   twin and the test suite, nothing more.
-
-`docs/PARITY_PROCEDURE.md` is the runbook for closing this the moment either
-input is available. Nothing else in Phase 1 is outstanding.
+**2008 - mid-2023.** Only the 2023-2026 archive was supplied, so parity is
+established over 764 of the 4,022 canonical sessions. The remaining window needs
+the pre-2023 archive.
 
 **S5b state parity is likewise pending on the same two inputs.** Its reference
 data and its comparator are both ready and validated (§1.6, §1.7); what is
@@ -176,8 +205,10 @@ source, never absorbed by a tolerance.
 | third-party TradingView package audited | **PASS** — reference data accepted, `ORB_S5b_v1.pine` rejected (15 defects), `parity_check.py` superseded |
 | no dead or parked rule implemented (spec G) | **PASS** — only exits are the ORB stop and the RTH close |
 | no-lookahead / no repainting | **PASS by construction** — completed-bar state only, `calc_on_every_tick=false`, S5b never read by the ORB path; to be re-verified on a live chart at 1.7 |
-| Pine-vs-canonical trade-list parity | **NOT RUN** — blocked, see §2 |
-| S5b state-timestamp spot check | **NOT RUN** — blocked, see §2 |
+| ORB trade-list parity, clean room, real data | **PASS** — 664/664 exact |
+| S5b state parity, clean room, real data | **PASS** — 764/764 sessions |
+| TradingView chart-export parity | **NOT RUN** — needs a chart export |
 
-Phase 2 (alerts, paper receiver) does not begin until the last two rows are
-green.
+Phase 2 (alerts, paper receiver) needs the TradingView row green as well: the
+executor consumes TradingView alerts, so an unverified TradingView leg means an
+unverified signal source.

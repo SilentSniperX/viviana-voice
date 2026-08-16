@@ -50,8 +50,14 @@ OUT_DIR = os.path.join(REPO, "tests", "_parity_run")
 # Raw ingestion
 # ---------------------------------------------------------------------------
 
-def iter_source_files(raw_dir: str):
-    """Yield (label, byte-stream-opener) for every CSV inside raw_dir."""
+def iter_source_files(raw_dir: str, series: str = "adj"):
+    """Yield (label, byte-stream-opener) for every matching CSV inside raw_dir.
+
+    The FirstRate archives ship BOTH a back-adjusted and an unadjusted
+    continuous series (`NQ_adj_1m_YYYY.csv` / `NQ_unadj_1m_YYYY.csv`). The
+    research engines used the ADJUSTED series, so the choice is made explicitly
+    here and logged, never left to filename ordering.
+    """
     if not os.path.isdir(raw_dir):
         raise SystemExit(f"no raw data directory: {raw_dir}\n"
                          f"Place the FirstRate archives there (git-ignored) and "
@@ -63,14 +69,32 @@ def iter_source_files(raw_dir: str):
         if name.lower().endswith(".zip"):
             with zipfile.ZipFile(path) as zf:
                 for member in sorted(zf.namelist()):
-                    if member.lower().endswith(".csv"):
-                        found = True
-                        yield f"{name}:{member}", (path, member)
+                    if not member.lower().endswith(".csv"):
+                        continue
+                    if not member_matches(member, series):
+                        continue
+                    found = True
+                    yield f"{name}:{member}", (path, member)
         elif name.lower().endswith(".csv"):
+            if not member_matches(name, series):
+                continue
             found = True
             yield name, (path, None)
     if not found:
-        raise SystemExit(f"{raw_dir} contains no .csv or .zip files")
+        raise SystemExit(f"{raw_dir} contains no .csv/.zip matching series="
+                         f"{series!r}")
+
+
+def member_matches(member: str, series: str) -> bool:
+    base = os.path.basename(member).lower()
+    if series == "any":
+        return True
+    if series == "adj":
+        # `_adj_` only — `_unadj_` must not slip through a substring test.
+        return "_unadj_" not in base and ("_adj_" in base or "adj" not in base)
+    if series == "unadj":
+        return "_unadj_" in base
+    raise SystemExit(f"unknown --series {series!r}")
 
 
 def open_source(handle) -> io.TextIOWrapper:
@@ -81,7 +105,8 @@ def open_source(handle) -> io.TextIOWrapper:
     return io.TextIOWrapper(zf.open(member), encoding="utf-8", newline="")
 
 
-def load_rth_by_year(raw_dir: str, year_from: int, year_to: int) -> dict:
+def load_rth_by_year(raw_dir: str, year_from: int, year_to: int,
+                     series: str = "adj") -> dict:
     """Stream every source file, keep RTH minutes only, bucket by (year, date).
 
     Duplicate timestamps are dropped, keeping the first occurrence — the same
@@ -90,7 +115,7 @@ def load_rth_by_year(raw_dir: str, year_from: int, year_to: int) -> dict:
     """
     by_year: dict[int, dict] = defaultdict(dict)   # year -> date -> {ts: Bar}
     stats = Counter()
-    for label, handle in iter_source_files(raw_dir):
+    for label, handle in iter_source_files(raw_dir, series):
         rows_kept = 0
         with open_source(handle) as fh:
             for row in csv.reader(fh):
@@ -128,11 +153,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--from", dest="year_from", type=int, default=2008)
     ap.add_argument("--to", dest="year_to", type=int, default=2026)
     ap.add_argument("--out-dir", default=OUT_DIR)
+    ap.add_argument("--series", default="adj", choices=["adj", "unadj", "any"],
+                    help="which continuous series to read; the research used "
+                         "the back-ADJUSTED one (default)")
     a = ap.parse_args(argv)
 
     os.makedirs(a.out_dir, exist_ok=True)
     print(f"reading raw 1-minute data from {a.raw_dir}")
-    by_year, stats = load_rth_by_year(a.raw_dir, a.year_from, a.year_to)
+    print(f"series: {a.series} (back-adjusted is what the research engines used)")
+    by_year, stats = load_rth_by_year(a.raw_dir, a.year_from, a.year_to,
+                                      a.series)
     if not by_year:
         raise SystemExit("no bars in the requested window")
 

@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from reference_engine import (  # noqa: E402
     Bar, COST_POINTS, POINT_VALUE, S5B_CONFIRMED, S5B_INVALIDATED, S5B_LATCHED,
-    S5B_PULLBACK, S5B_WAITING, alignment, body_fraction, orb_day, s5b_day, to_5m,
+    S5B_FAILURE, S5B_PULLBACK, S5B_WAITING, alignment, body_fraction, orb_day,
+    s5b_day, to_5m,
 )
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -327,15 +328,26 @@ def test_s5b_invalidation() -> None:
           s["state"] == S5B_INVALIDATED and s["invalidated_ts"] is not None)
 
 
-def test_s5b_new_extreme_does_not_open_pullback() -> None:
+def test_s5b_new_extreme_still_opens_pullback() -> None:
+    """A bar that extends the leg AND retraces into the band does open the
+    pullback: there is no "no new extreme" precondition.
+
+    Resolved empirically (spec/SPEC_SEAMS.md S-4): adding that precondition
+    breaks the band flag on 30 of 764 sessions.
+    """
     ob = s5b_opening_balance()
     seq = [
         bar("10:00", 96, 110, 95, 109),
-        bar("10:05", 109, 120, 104, 118),        # makes a new leg extreme
+        # New leg high 120, and low 104 -> retr = (120-104)/30 = 0.53, in band.
+        bar("10:05", 109, 120, 104, 118),
     ]
     s = s5b_day(ob + seq + tail("10:10", 118))
-    check("C.4: a bar making a new leg extreme cannot open the pullback",
-          s["pullback_ts"] is None and s["state"] == S5B_LATCHED, str(s["state"]))
+    # That same bar also satisfies the two-bar no-progress test, so the state
+    # advances straight to COUNTERATTACK_FAILURE; what matters here is that the
+    # pullback opened at all.
+    check("C.4: a bar making a new leg extreme can still open the pullback",
+          s["pullback_ts"] is not None and s["state"] in (S5B_PULLBACK, S5B_FAILURE),
+          str(s["state"]))
 
 
 def test_s5b_short_mirror() -> None:
@@ -353,12 +365,12 @@ def test_s5b_short_mirror() -> None:
           f"{s['direction']} {s['state']}")
 
 
-def test_s5b_entry_deadline() -> None:
-    """The 11:30 cap applies to standalone ENTRIES, not to the state machine.
+def test_s5b_scan_stops_after_1130() -> None:
+    """The classifier runs 10:00 through the 11:30 bar and stops there.
 
-    tmp_s5b_round3c.py::s5b_day scans every session bar; only `standalone()`
-    caps at 11:30. Capping the classifier itself would silently drop late
-    confirmations that the research flag files do record.
+    Resolved empirically against s5b_day_flags_allmult.csv on 764 sessions of
+    real data (spec/SPEC_SEAMS.md S-1): without the cap, 57 sessions latch after
+    11:30 that the reference never latches.
     """
     ob = s5b_opening_balance()
     pad = tail("10:00", 96, "11:25")
@@ -370,19 +382,30 @@ def test_s5b_entry_deadline() -> None:
         bar("11:50", 104.5, 108, 104, 107, 5000),
     ]
     s = s5b_day(ob + pad + seq + tail("11:55", 107))
-    check("C: the state machine still reaches CONFIRMED after 11:30",
-          s["state"] == S5B_CONFIRMED, f"{s['state']} {s['confirmed_ts']}")
-    check("C: a confirmation after the 11:30 bar is not entry-eligible",
-          s["entry_eligible"] is False)
+    check("C: a sequence completing after 11:30 does not confirm",
+          s["state"] != S5B_CONFIRMED, f"{s['state']} {s['confirmed_ts']}")
+    # The 11:30 bar itself is inside the window.
+    ob2 = s5b_opening_balance()
+    pad2 = tail("10:00", 96, "11:05")
+    seq2 = [
+        bar("11:10", 96, 110, 95, 109),
+        bar("11:15", 109, 110, 104, 105),
+        bar("11:20", 105, 106, 103.5, 104),
+        bar("11:25", 104, 105, 103.2, 104.5),
+        bar("11:30", 104.5, 106.5, 104, 106, 5000),
+    ]
+    s2 = s5b_day(ob2 + pad2 + seq2 + tail("11:35", 106))
+    check("C: the 11:30 bar is inside the classifier window",
+          s2["state"] == S5B_CONFIRMED and s2["entry_eligible"] is True,
+          f"{s2['state']} {s2['confirmed_ts']}")
 
 
-def test_s5b_band_is_sticky_once_activated() -> None:
-    """Failure and reassertion are evaluated after the pullback opens, without
-    re-testing the retracement band on those later bars.
+def test_s5b_band_is_a_live_condition() -> None:
+    """The failure and reassertion bars must themselves sit inside the 25-75%
+    band; the band is not a latch that stays set once touched.
 
-    The reference sets a sticky `pull` flag; re-requiring the band on the
-    reassertion bar suppresses confirmations, because a strong reassertion bar
-    has a shallow retracement by construction.
+    Resolved empirically (spec/SPEC_SEAMS.md S-2): treating it as sticky adds 48
+    confirmations across 764 sessions that the reference does not have.
     """
     ob = s5b_opening_balance()
     seq = [
@@ -394,23 +417,29 @@ def test_s5b_band_is_sticky_once_activated() -> None:
         bar("10:20", 108.5, 112, 108, 111.5, 5000),
     ]
     s = s5b_day(ob + seq + tail("10:25", 111))
-    check("C: confirmation does not require the reassertion bar to be in the band",
-          s["state"] == S5B_CONFIRMED, f"{s['state']}")
+    check("C: a reassertion bar outside the band does not confirm",
+          s["state"] != S5B_CONFIRMED, f"{s['state']}")
 
 
-def test_s5b_failure_needs_two_bars_after_pullback() -> None:
-    """`j - pull_start_j >= 2` in the reference: the bar that opens the pullback
-    cannot itself complete the failure and the reassertion."""
+def test_s5b_no_two_bar_delay_after_pullback() -> None:
+    """There is no waiting period between the pullback opening and the sequence
+    completing — only the two-bar failure test itself constrains timing.
+
+    Resolved empirically (spec/SPEC_SEAMS.md S-3): imposing a two-bar delay
+    costs 46 confirmations across 764 sessions.
+    """
     ob = s5b_opening_balance()
     seq = [
-        bar("10:00", 96, 110, 95, 109),
-        # This single bar is in the band AND closes above the prior high with a
-        # directional body and heavy volume. The reference cannot confirm here.
-        bar("10:05", 104, 110, 104, 109.5, 9000),
+        bar("10:00", 96, 110, 95, 109),          # latch, leg 90 -> 110
+        bar("10:05", 109, 110, 104, 105),        # retr 0.30 -> pullback opens
+        # The very next bar is still in band (retr 0.31), satisfies the two-bar
+        # no-progress test, closes above the prior bar's high with a directional
+        # body on heavy volume: it confirms immediately, one bar later.
+        bar("10:10", 105, 111, 104.5, 110.5, 5000),
     ]
-    s = s5b_day(ob + seq + tail("10:10", 109))
-    check("C: the pullback bar itself cannot complete the sequence",
-          s["state"] != S5B_CONFIRMED, f"{s['state']}")
+    s = s5b_day(ob + seq + tail("10:15", 106))
+    check("C: no enforced delay between the pullback and the confirmation",
+          s["state"] == S5B_CONFIRMED, f"{s['state']}")
 
 
 def test_s5b_needs_six_ob_bars() -> None:

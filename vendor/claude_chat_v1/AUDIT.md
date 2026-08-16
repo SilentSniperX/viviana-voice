@@ -1,5 +1,17 @@
 # INDEPENDENT AUDIT — Claude Chat "TradingView v1 package"
 
+> **CORRECTION, after the clean-room run on real data.** Findings P-4, P-5, P-6
+> and P-7 below are **WITHDRAWN — they were wrong.** I had taken
+> `tmp_s5b_round3c.py` as authoritative for spec section C. Running the frozen
+> engine over 764 real sessions against `s5b_day_flags_allmult.csv` shows that
+> script is an exploratory variant that does *not* reproduce the reference
+> flags, while this package's readings do. On all four of those clauses the
+> Claude Chat implementation was right and mine was wrong; my engine and Pine
+> have been corrected to match. Evidence and the resolving grid are in
+> `spec/SPEC_SEAMS.md` S-1..S-4. P-9 is downgraded to a note for the same
+> reason. Everything else in this audit stands, and the ORB findings (P-1, P-2,
+> P-3) are unaffected.
+
 Audited as an untrusted third-party contribution, per the instruction not to
 assume it is correct because another Claude produced it. The files in this
 directory are the **originals, unmodified**, kept for provenance.
@@ -19,7 +31,7 @@ spec and the two research engines
 | `parity_reference_s5b_states_2016_2026.csv` | **TRUSTWORTHY** — 2,705/2,705 sessions match the validated research flags |
 | 12 preregistered S5b spot-check dates | **TRUSTWORTHY** — 12/12 internally consistent and consistent with the research flags |
 | `parity_check.py` | **NOT FIT FOR USE AS A GATE** — passes a corrupt export, fails a correct one |
-| `ORB_S5b_v1.pine` | **NOT READY** — 9 parity-breaking or semantic defects, 6 lesser ones |
+| `ORB_S5b_v1.pine` | **NOT READY** — 4 parity-breaking defects (P-1, P-2, P-3, P-8) plus 6 lesser ones. Its S5b clause readings were **right** and mine were wrong; see the correction above |
 | `IMPLEMENTATION_AND_PARITY.txt` | mostly accurate; 3 incorrect claims (D-1..D-3) |
 
 ---
@@ -148,17 +160,21 @@ the trade."* The script takes the trade and closes it, booking a round trip the
 reference does not contain — an EXTRA_DAY plus fabricated P&L on every such
 session.
 
-**P-4 (L149-150, L168-169) Pullback activation is missing the "no new extreme"
-condition.** `tmp_s5b_round3c.py` requires
+**P-4 — WITHDRAWN. (L149-150, L168-169) Pullback activation and the "no new
+extreme" condition.**
+*Original finding, now known to be wrong:* `tmp_s5b_round3c.py` requires
 `.25 <= retr <= .75 and not pull and not made_new_extreme`. The Pine omits the
 last clause, so a wide bar that both extends the leg and prints a deep low opens
 a pullback the research never opened.
 
-**P-5 (L152-158) The failure and reassertion are evaluated on the same bar the
-pullback opens.** The reference gates them behind `j - pull_start_j >= 2`. The
+**P-5 — WITHDRAWN. (L152-158) Failure and reassertion on the pullback bar.**
+*Original finding, now known to be wrong:* The reference gates them behind `j - pull_start_j >= 2`. The
 Pine can therefore confirm two bars earlier than the research engine.
 
-**P-6 (L153, L156) `inBand` is re-required on the failure and reassertion bars.**
+**P-6 — WITHDRAWN. (L153, L156) `inBand` re-required on the failure and
+reassertion bars.** This is CORRECT: the band is a live condition, and treating
+it as sticky adds 48 false confirmations across 764 sessions.
+*Original finding, now known to be wrong:*
 In the reference `pull` is a **sticky flag**: once the band has been touched,
 failure and reassertion are evaluated on every later bar regardless of the
 current bar's retracement. Because a genuine reassertion bar rallies away from
@@ -166,7 +182,12 @@ the pullback low, its retracement is shallow **by construction** — frequently
 below 0.25 — so this clause suppresses exactly the confirmations it is meant to
 detect. This is the most consequential S5b defect.
 
-**P-7 (L128) The whole state machine is capped at 11:30.**
+**P-7 — WITHDRAWN. (L128) The state machine capped at 11:30.** This is CORRECT.
+Without the cap, 57 of 764 sessions latch after 11:30 that the reference never
+latches. (The 23 post-11:30 confirmations in their own reference CSV are
+sessions that latched before 11:30 and finalise one bar later, which is
+consistent with the cap.)
+*Original finding, now known to be wrong:*
 `s5scan = ... hm >= 1000 and hm <= 1130`. In the reference the 11:30 cap applies
 only to standalone *entries*; `s5b_day` classifies across the whole session.
 **Their own reference CSV contains 23 confirmations after 11:30** — the Pine
@@ -178,7 +199,12 @@ history; called conditionally they return unreliable values. This corrupts
 `s5pStop`, hence the risk floor, hence whether CONFIRMED fires at all. Pine
 flags this as a warning rather than an error, so it will not stop compilation.
 
-**P-9 (L119-126, L25) CONFIRMED is gated on a ≥5-point risk floor.**
+**P-9 — DOWNGRADED to a note. (L119-126, L25) CONFIRMED gated on a ≥5-point
+risk floor.** The floor is empirically inert: their confirmation flags match
+`re12` on all 2,705 sessions, so it never suppressed a confirmation in the
+reference window. It remains an extra condition the frozen spec does not state,
+and could bite on future data.
+*Original finding:*
 The floor and the `ta.lowest(low,7) - 2` stop come from `standalone()` — the
 S5b *trade* function — not from the classifier. Frozen spec C.8 says the state
 is CONFIRMED when pullback + failure + reassertion complete, with no risk
@@ -251,8 +277,11 @@ list agrees.
 - Spot-check list: **accepted**, used as the S5b validation set.
 - `parity_check.py`: **superseded** by `tests/parity_tv_list_of_trades.py`.
   The original is retained here unmodified as the audited artifact.
-- `ORB_S5b_v1.pine`: **not adopted.** The project implementation stays
-  `pine/nq_orb_s5b_v1.pine`, which does not contain P-1 through P-15; every one
-  of the ORB and S5b behaviours above is pinned by a named test in
-  `tests/test_reference_engine.py` (58 checks). The one superior mechanic from
-  this file was ported across.
+- `ORB_S5b_v1.pine`: **not adopted as the implementation**, because P-1, P-2,
+  P-3 and P-8 are real and P-2 is a live risk-control failure. But its S5b
+  reading was more faithful than mine, and `pine/nq_orb_s5b_v1.pine` has been
+  corrected to match it on all four clauses. Two mechanics were ported across:
+  `strategy.close(..., immediately = true)` for the session-close exit, and the
+  S5b clause readings themselves. Every ORB and S5b behaviour is pinned by a
+  named test in `tests/test_reference_engine.py` (58 checks), and both engines
+  now reproduce the references exactly on 764 sessions of real data.

@@ -251,7 +251,6 @@ var int   s5bStateN  = 0            // 0 WAITING 1 LATCHED 2 PULLBACK 3 FAILURE 
 var float legHigh    = na
 var float legLow     = na
 var bool  pullActive = false
-var int   pullStartIdx = na
 var int   sessionIdx = 0
 var int   latchTs    = na
 var int   pullbackTs = na
@@ -276,7 +275,6 @@ if isNewSession
     legHigh      := na
     legLow       := na
     pullActive   := false
-    pullStartIdx := na
     sessionIdx   := 0
     latchTs      := na
     pullbackTs   := na
@@ -316,7 +314,12 @@ if barstate.isconfirmed and inRth
 
 obReady = obBars >= 6 and not na(obH) and not na(obL)
 
-if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LATCH_FROM_MIN
+// C: the classifier runs from the 10:00 bar through the 11:30 bar inclusive and
+// stops there — latch included. Confirmed empirically against
+// s5b_day_flags_allmult.csv on 764 sessions of real 1-minute data: with the cap
+// latch/band/confirmation/invalidation match 764/764; without it, 57 sessions
+// latch after 11:30 that the reference never latches. See spec/SPEC_SEAMS.md S-1.
+if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LATCH_FROM_MIN and nyMinute <= S5B_DEADLINE
     if s5bSide == 0
         // C: first close beyond OBH/OBL latches direction; first one wins.
         if close > obH
@@ -330,7 +333,6 @@ if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LA
             legLow    := sessLow
             legHigh   := sessHigh
     else
-        madeNewExtreme = s5bSide == 1 ? high > legHigh : low < legLow
         if s5bSide == 1
             legHigh := math.max(legHigh, high)
         else
@@ -345,12 +347,17 @@ if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LA
                 invalidTs := time
                 s5bDone   := true
             else
-                if retr >= BAND_LO and retr <= BAND_HI and not pullActive and not madeNewExtreme
+                // C.4: valid pullback when the retracement is 25%-75%.
+                inBand = retr >= BAND_LO and retr <= BAND_HI
+                if inBand and not pullActive
                     pullActive   := true
-                    pullStartIdx := sessionIdx
                     pullbackTs   := time
                     s5bStateN    := 2
-                if pullActive and (sessionIdx - pullStartIdx) >= 2 and sessionIdx >= 3
+                // The band is a LIVE condition on the failure and reassertion
+                // bars, not a latch that stays set once touched. Confirmed
+                // empirically: treating it as sticky costs 48 of 764
+                // confirmations against the reference. See SPEC_SEAMS.md S-2.
+                if pullActive and inBand and sessionIdx >= 3
                     // C.6: two consecutive bars with no meaningful new progress.
                     failCond = s5bSide == 1 ?
                          (low  >= low[1]  - FAIL_TOL and low[1]  >= low[2]  - FAIL_TOL) :
@@ -366,11 +373,6 @@ if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LA
                             s5bStateN := 3
                     if failCond and resume and pressure
                         // C.8: pullback + failure + reassertion => CONFIRMED.
-                        // Note the state machine has NO upper time bound: spec C's
-                        // 11:30 limit applies to standalone S5b ENTRIES, not to
-                        // the classifier, and the research flag files record
-                        // confirmations after 11:30. Capping the machine here
-                        // would silently drop them.
                         s5bStateN := 4
                         confirmTs := time
                         s5bDone   := true
