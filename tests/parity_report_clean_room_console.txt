@@ -1,0 +1,27 @@
+reading raw 1-minute data from /home/user/viviana-voice/data/raw
+series: adj (back-adjusted is what the research engines used)
+  b8086b37-NQ_1m_by_year_20232026.zip:NQ_adj_1m_2023.csv: 46,665 RTH minutes
+  b8086b37-NQ_1m_by_year_20232026.zip:NQ_adj_1m_2024.csv: 99,255 RTH minutes
+  b8086b37-NQ_1m_by_year_20232026.zip:NQ_adj_1m_2025.csv: 98,474 RTH minutes
+  b8086b37-NQ_1m_by_year_20232026.zip:NQ_adj_1m_2026.csv: 48,805 RTH minutes
+  2023: 121 sessions, 98 trades
+  2024: 259 sessions, 233 trades
+  2025: 257 sessions, 219 trades
+  2026: 127 sessions, 114 trades
+
+sessions processed : 764
+ORB trades         : 664  -> /home/user/viviana-voice/tests/_parity_run/engine_orb_trades.csv
+S5b timelines      : 764  -> /home/user/viviana-voice/tests/_parity_run/engine_s5b_states.csv
+duplicate minutes  : 0
+
+--- ORB trade-list parity ---
+canonical 664  candidate 664  matched 664  unknown 0
+report -> /home/user/viviana-voice/tests/parity_report_orb_clean_room.md
+
+--- S5b state parity ---
+sessions compared 764  mismatches 0
+report -> /home/user/viviana-voice/tests/parity_report_s5b_clean_room.md
+
+==================================================================
+ORB parity exit code 0, S5b parity exit code 0
+Non-zero means unresolved mismatches — read the reports before touching the Pine.

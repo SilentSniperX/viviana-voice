@@ -1,0 +1,22 @@
+joined 4022/4022 canonical trades to the S5b flag file
+
+state       era          n     PF  published  result
+COMPLETED   2008-15    413   1.92       1.92  OK
+COMPLETED   2016-23    269   2.54       2.54  OK
+COMPLETED   2024-26     79   2.61       2.61  OK
+LATCH-ONLY  2008-15    141   1.70       1.70  OK
+LATCH-ONLY  2016-23    137   2.76       2.76  OK
+LATCH-ONLY  2024-26     34   1.97       1.97  OK
+NEAR-MISS   2008-15   1047   0.70       0.70  OK
+NEAR-MISS   2016-23   1167   0.90       0.90  OK
+NEAR-MISS   2024-26    412   1.04       1.04  OK
+NO LATCH    2008-15    123   0.26       0.26  OK
+NO LATCH    2016-23    156   0.29       0.29  OK
+NO LATCH    2024-26     41   0.22       0.22  OK
+
+COMPLETED session counts: [413, 269, 79] (published [413, 269, 79])
+
+================================================================
+PASS — the shipped S5b flag file reproduces the published four-state
+taxonomy exactly, and joins 1:1 with the canonical ORB trade list.
+It is a sound reference for step 1.8 S5b state parity.
