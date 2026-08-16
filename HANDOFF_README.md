@@ -13,10 +13,33 @@ the implementation are the ORB hard stop and the RTH close.
 
 | leg of the milestone | state | evidence |
 |---|---|---|
-| PYTHON REFERENCE = PINE LOGIC | **PROVEN** | 664/664 ORB trades and 764/764 S5b sessions, exact, on real 1-minute data |
-| PINE LOGIC = TRADINGVIEW OUTPUT | **NOT MEASURED** | no TradingView access in the environment this was built in |
+| PYTHON REFERENCE = PINE RULES | **PROVEN** | 664/664 ORB trades and 764/764 S5b sessions, exact, on real 1-minute data |
+| PINE LOGIC = TRADINGVIEW OUTPUT | **IN PROGRESS** | compiles as of v1.3; four defects found and fixed on TradingView so far |
 
-The Pine source has **never been compiled by TradingView**. That is the gap.
+Read that first row precisely: it proves the **rules** agree, not that the Pine
+*runs* correctly. Those are different claims, and the difference has already
+cost real time — see below.
+
+### What the TradingView leg caught that nothing else could
+
+v1.0-v1.2 booked **zero trades**, on every symbol, timeframe and capital
+setting, while plotting the opening range and S5b states perfectly.
+
+Root cause: Pine executes the entire script top to bottom on every bar, so
+`pendingEntry` — set on the signal bar near the top of the file — was already
+true when the entry-evaluation block read it *further down on that same bar*.
+It found `time - signalBarTs == 0` instead of 300000, took the abort branch, and
+cancelled the order it had just submitted. Fixed in v1.3 by a
+`time > signalBarTs` bar-advance guard.
+
+The Python twin **cannot express this bug**: it indexes bars explicitly
+(`sig_i + 1`) rather than carrying a flag across a bar boundary. That is why 58
+clause tests and an exact 664/664 clean-room parity run all passed while
+TradingView booked nothing. A rule-level twin proves rule agreement and nothing
+about the host's execution model.
+
+`tests/lint_pine.py` now encodes this failure shape (rule L4) plus the three
+compile errors TradingView reported, so none of them can come back silently.
 
 ---
 

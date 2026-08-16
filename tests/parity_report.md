@@ -207,6 +207,8 @@ source, never absorbed by a tolerance.
 | no-lookahead / no repainting | **PASS by construction** — completed-bar state only, `calc_on_every_tick=false`, S5b never read by the ORB path; to be re-verified on a live chart at 1.7 |
 | ORB trade-list parity, clean room, real data | **PASS** — 664/664 exact |
 | S5b state parity, clean room, real data | **PASS** — 764/764 sessions |
+| Pine compiles in TradingView | **PASS** as of v1.3 — three compile errors fixed |
+| Pine generates trades in TradingView | **FIXED in v1.3, awaiting confirmation** — v1.0-v1.2 booked zero trades; root cause was an execution-order bug the Python twin cannot express (see HANDOFF_README) |
 | TradingView chart-export parity | **NOT RUN** — needs a chart export |
 
 Phase 2 (alerts, paper receiver) needs the TradingView row green as well: the

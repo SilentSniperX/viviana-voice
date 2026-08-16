@@ -1,6 +1,14 @@
 //@version=6
 // =============================================================================
-// NQ ORB + S5b v1  —  FROZEN SPEC IMPLEMENTATION
+// NQ ORB + S5b v1.3  —  FROZEN SPEC IMPLEMENTATION
+// =============================================================================
+// v1.3 fixes the ZERO-TRADE bug. The entry-evaluation block ran on the signal
+// bar itself — Pine executes the whole script every bar, so `pendingEntry` set
+// near the top was already true when the block read it lower down — and it
+// cancelled the order it had just submitted. See the `time > signalBarTs` guard
+// in section B. Also: the non-RTH CONFIG ERROR was a false positive and is
+// gone, capital/margin now need no manual property changes, and a lifecycle
+// counter table is shown bottom-right.
 // =============================================================================
 // Implements spec/STRATEGY_SPEC_FROZEN.md exactly. Every rule below is tagged
 // with the spec section it comes from. Nothing here optimises, filters or
@@ -31,7 +39,7 @@ strategy(
      shorttitle             = "NQ_ORB_S5B",   // max 10 chars
      overlay                = true,
      pyramiding             = 0,
-     initial_capital        = 100000,
+     initial_capital        = 1000000,
      default_qty_type       = strategy.fixed,
      default_qty_value      = 1,
      calc_on_every_tick     = false,
@@ -40,6 +48,8 @@ strategy(
      close_entries_rule     = "ANY",
      commission_type        = strategy.commission.cash_per_contract,
      commission_value       = 0.0,
+     margin_long            = 0,
+     margin_short           = 0,
      max_labels_count       = 500)
 
 // -----------------------------------------------------------------------------
@@ -104,6 +114,21 @@ var float exitPx       = na
 var int   exitTs       = na
 var string exitReason  = ""
 
+// --- lifecycle counters -------------------------------------------------------
+// Diagnostic only: these count events, they never gate one. They exist so that a
+// zero-trade condition can be localised to a single stage without a scavenger
+// hunt through TradingView settings. Read them top to bottom — the first row
+// that is 0 while the row above it is non-zero is where the pipeline breaks.
+var int cSessions   = 0     // RTH sessions seen
+var int cOrBuilt    = 0     // sessions where the opening range completed
+var int cQualified  = 0     // qualified breakouts found
+var int cSubmitted  = 0     // entry orders submitted to the broker emulator
+var int cConfirmed  = 0     // entries confirmed on the next bar
+var int cSkipped    = 0     // skipped: entry beyond the stop, or a missing bar
+var int cStopped    = 0     // exits by the ORB hard stop
+var int cClosed     = 0     // exits at the RTH close
+var bool orCountedToday = false
+
 if isNewSession
     orH          := na
     orL          := na
@@ -159,6 +184,8 @@ if barstate.isconfirmed and inQualWindow and orbSide == 0 and not tradeTaken and
         orbSide      := -1
         signalBarTs  := time
         pendingEntry := true
+    // lint:same-bar-ok — this MUST run on the signal bar: it is the submission,
+    // not the evaluation. The evaluation is the guarded block further down.
     if pendingEntry
         // Orders are submitted on the SIGNAL bar so that TradingView's fill
         // model executes them at the next bar's open — the frozen next-bar
@@ -166,6 +193,8 @@ if barstate.isconfirmed and inQualWindow and orbSide == 0 and not tradeTaken and
         // time so it is already live on the entry bar itself (the canonical
         // list contains 8 same-bar stop resolutions).
         plannedStop = orbSide == 1 ? orL : orH
+        cQualified += 1
+        cSubmitted += 1
         if orbSide == 1
             strategy.entry("ORB_LONG", strategy.long, comment = "ORB_LONG_ENTRY")
             strategy.exit("ORB_STOP_L", from_entry = "ORB_LONG", stop = plannedStop,
@@ -181,10 +210,24 @@ if barstate.isconfirmed and inQualWindow and orbSide == 0 and not tradeTaken and
 // that guard: a gap makes the difference larger and the trade is abandoned.
 barIsNextAfterSignal = pendingEntry and not na(signalBarTs) and (time - signalBarTs) == 300000
 
-// Evaluated on the confirmed bar so that historical and realtime transitions are
+// `time > signalBarTs` is LOAD-BEARING, not defensive.
+//
+// Pine executes the whole script top-to-bottom on every bar, so `pendingEntry`
+// — set a few lines above on the signal bar — is already true when execution
+// reaches this block ON THAT SAME BAR. Without this guard the block runs on the
+// signal bar, finds `time - signalBarTs == 0` rather than 300000, takes the
+// abort branch, and cancels the entry order that was just submitted. The result
+// is ZERO trades on every symbol, timeframe and capital setting.
+//
+// That was the v1.0-v1.2 zero-trade bug. The Python twin cannot reproduce it
+// because it indexes bars explicitly (`sig_i + 1`) instead of carrying a flag
+// across a bar boundary, which is why 58 clause tests and an exact 664/664
+// clean-room parity run all passed while TradingView booked nothing.
+//
+// Evaluated on the confirmed bar so historical and realtime transitions are
 // identical (spec/PARITY_ACCEPTANCE_GATES.md, no-lookahead). The recorded entry
 // price is the bar's OPEN either way — it is fixed from the bar's first tick.
-if pendingEntry and barstate.isconfirmed
+if pendingEntry and barstate.isconfirmed and not na(signalBarTs) and time > signalBarTs
     if barIsNextAfterSignal
         candidateEntry = open
         candidateStop  = orbSide == 1 ? orL : orH
@@ -199,6 +242,7 @@ if pendingEntry and barstate.isconfirmed
             orbSide      := 0
             pendingEntry := false
             daySettled   := true
+            cSkipped     += 1
             strategy.cancel_all()
             strategy.close_all(comment = "ORB_SKIPPED", immediately = true)
         else
@@ -207,11 +251,13 @@ if pendingEntry and barstate.isconfirmed
             entryTs      := time
             pendingEntry := false
             tradeTaken   := true
+            cConfirmed   += 1
     else
         // Gap where the entry bar should have been: no trade this session.
         orbSide      := 0
         pendingEntry := false
         daySettled   := true
+        cSkipped     += 1
         strategy.cancel_all()
         strategy.close_all(comment = "ORB_SKIPPED", immediately = true)
 
@@ -358,6 +404,8 @@ if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LA
                 // bars, not a latch that stays set once touched. Confirmed
                 // empirically: treating it as sticky costs 48 of 764
                 // confirmations against the reference. See SPEC_SEAMS.md S-2.
+                // lint:same-bar-ok — the sequence may legitimately complete on
+                // the same bar the pullback opens (SPEC_SEAMS.md S-3: no delay).
                 if pullActive and inBand and sessionIdx >= 3
                     // C.6: two consecutive bars with no meaningful new progress.
                     failCond = s5bSide == 1 ?
@@ -516,26 +564,53 @@ if showConviction and (evtS5bLong or evtS5bShort)
               textcolor = color.white, size = size.normal)
 
 // --- chart configuration guard ------------------------------------------------
-// The frozen engines run on 5-minute REGULAR-session bars. On any other chart
-// the opening range, the S5b opening balance and the `[1]`/`[2]` bar references
-// silently mean something else, so say so loudly instead of producing numbers
-// that look right. CLAUDE.md: "No silent fallbacks."
+// Only the TIMEFRAME is a hard requirement. Overnight bars are NOT an error: a
+// futures chart legitimately carries them, every rule here is gated on the New
+// York clock, and `session.islastbar_regular` identifies the regular-session
+// close even on an extended-hours chart. The earlier version flagged any bar
+// outside 09:30-16:00 and produced a permanent false-positive CONFIG ERROR on
+// ordinary NQ1! charts.
 wrongTimeframe = timeframe.period != "5"
-var bool sawNonRthBar = false
-if barstate.isconfirmed and (nyMinute < OR_OPEN_MIN or nyMinute >= 960)
-    sawNonRthBar := true
-configBad = wrongTimeframe or sawNonRthBar
-if configBad and barstate.islast
+if wrongTimeframe and barstate.islast
     label.new(bar_index, high,
-              "CONFIG ERROR\n" +
-              (wrongTimeframe ? "timeframe is " + timeframe.period + ", must be 5\n" : "") +
-              (sawNonRthBar ? "chart includes non-RTH bars; set the session to\n" +
-                              "regular trading hours (America/New_York)\n" : "") +
+              "CONFIG ERROR\ntimeframe is " + timeframe.period + ", must be 5\n" +
               "Parity is not valid on this chart.",
               style = label.style_label_down, color = color.new(color.orange, 0),
               textcolor = color.black, size = size.normal)
 
-var table hud = table.new(position.top_right, 2, 5, border_width = 1)
+if isNewSession
+    cSessions += 1
+    orCountedToday := false
+if orReady and not orCountedToday
+    cOrBuilt += 1
+    orCountedToday := true
+if evtStop
+    cStopped += 1
+if evtClose
+    cClosed += 1
+
+var table hud = table.new(position.top_right, 2, 6, border_width = 1)
+var table dbg = table.new(position.bottom_right, 2, 9, border_width = 1)
+if barstate.islast
+    table.cell(dbg, 0, 0, "LIFECYCLE",   text_color = color.yellow, text_size = size.small)
+    table.cell(dbg, 1, 0, "count",       text_color = color.yellow, text_size = size.small)
+    table.cell(dbg, 0, 1, "sessions",    text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 1, str.tostring(cSessions),  text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 2, "OR built",    text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 2, str.tostring(cOrBuilt),   text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 3, "qualified",   text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 3, str.tostring(cQualified), text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 4, "submitted",   text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 4, str.tostring(cSubmitted), text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 5, "confirmed",   text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 5, str.tostring(cConfirmed), text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 6, "skipped",     text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 6, str.tostring(cSkipped),   text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 7, "stop exits",  text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 7, str.tostring(cStopped),   text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 8, "close exits", text_color = color.gray,  text_size = size.small)
+    table.cell(dbg, 1, 8, str.tostring(cClosed),    text_color = color.white, text_size = size.small)
+
 if showLabels and barstate.islast
     table.cell(hud, 0, 0, "ORB",        text_color = color.gray,  text_size = size.small)
     table.cell(hud, 1, 0, orbDirStr,    text_color = color.white, text_size = size.small)
