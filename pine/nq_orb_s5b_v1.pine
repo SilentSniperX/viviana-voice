@@ -523,16 +523,16 @@ if showLabels and barstate.islast
     table.cell(hud, 1, 0, orbDirStr,    text_color = color.white, text_size = size.small)
     table.cell(hud, 0, 1, "S5b",        text_color = color.gray,  text_size = size.small)
     table.cell(hud, 1, 1, s5bDirStr + " / " + s5bStateStr,
-                                        text_color = color.white, text_size = size.small)
+                                       text_color = color.white, text_size = size.small)
     table.cell(hud, 0, 2, "Alignment",  text_color = color.gray,  text_size = size.small)
     table.cell(hud, 1, 2, alignmentStr, text_color = color.white, text_size = size.small)
     table.cell(hud, 0, 3, "ORH / ORL",  text_color = color.gray,  text_size = size.small)
     table.cell(hud, 1, 3, (na(orH) ? "-" : str.tostring(orH)) + " / " +
                           (na(orL) ? "-" : str.tostring(orL)),
-                                        text_color = color.white, text_size = size.small)
+                                       text_color = color.white, text_size = size.small)
     table.cell(hud, 0, 4, "Stop",       text_color = color.gray,  text_size = size.small)
     table.cell(hud, 1, 4, na(stopPx) ? "-" : str.tostring(stopPx),
-                                        text_color = color.white, text_size = size.small)
+                                       text_color = color.white, text_size = size.small)
 
 // =============================================================================
 // SECTION G — DEAD / PARKED (implemented nowhere, listed so review is cheap)
