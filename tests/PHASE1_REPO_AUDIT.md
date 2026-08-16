@@ -104,9 +104,10 @@ Phase 1 is split so that each step is independently testable, per `CLAUDE.md`
 | 1.3 | frozen-spec engine in dependency-free Python (ORB + S5b), the testable twin of the Pine | **done** — `tests/reference_engine.py` |
 | 1.4 | clause-by-clause test suite | **done** — 55 checks across 27 tests pass |
 | 1.5 | Pine v6 ORB + S5b classifier + state machine + alert payloads | **done** — `pine/nq_orb_s5b_v1.pine` |
-| 1.6 | parity comparator with the ten-class taxonomy | **done** — `tests/parity_orb.py` |
+| 1.6 | ORB parity comparator with the ten-class taxonomy | **done** — `tests/parity_orb.py` |
+| 1.6b | S5b reference validation + state comparator | **done** — `tests/verify_s5b_reference.py` reproduces all 12 published profit factors; `tests/parity_s5b.py` |
 | 1.7 | run TradingView parity and classify every mismatch | **blocked on C.1/C.2** |
-| 1.8 | S5b state spot-check against `s5b_day_flags_allmult.csv` | **blocked on C.1** |
+| 1.8 | run the S5b state spot-check on real bars | **blocked on C.1/C.2** |
 
 Phases 2-4 (alerts, paper webhook receiver, idempotency, reconciliation) do not
 start until 1.7 and 1.8 produce a report with zero unknown mismatches.
@@ -128,7 +129,7 @@ source and the comparator. What remains is running them.
 
 Unblock by either:
 - placing the two archives under `data/raw/` (git-ignored) and running the
-  clean-room path in `docs/PARITY_PROCEDURE.md` §4; or
+  clean-room path in `docs/PARITY_PROCEDURE.md` §4 (this also runs the S5b spot check); or
 - exporting chart data from TradingView (§2), which needs no local raw data.
 
 ### C.2 No TradingView connection in this session — blocks 1.7

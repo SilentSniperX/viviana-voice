@@ -38,6 +38,18 @@ columns `time, px_or_high, px_or_low, px_orb_side, px_entry, px_stop, px_exit,
 px_exit_code, px_s5b_state, px_s5b_side, px_ob_high, px_ob_low, px_alignment`.
 
 `px_exit_code`: 0 none, 1 ORB stop, 2 session close.
+`px_s5b_state`: 0 waiting, 1 latched, 2 pullback, 3 failure, 4 confirmed,
+5 invalidated.
+
+The same export drives the S5b state check:
+
+```bash
+python3 tests/parity_s5b.py --tv-export /path/to/chart_data.csv \
+        --report tests/parity_report_s5b.md
+```
+
+Its references are the shipped day flags and the 763 published confirmation
+timestamps, both validated by `python3 tests/verify_s5b_reference.py`.
 
 ## 3. Compare
 
@@ -77,6 +89,8 @@ python3 tests/reference_engine.py --minute data/raw/NQ_1m.csv \
         --out /tmp/engine_trades.csv --s5b /tmp/engine_s5b.csv
 python3 tests/parity_orb.py --candidate /tmp/engine_trades.csv \
         --report tests/parity_report_python.md
+python3 tests/parity_s5b.py --candidate /tmp/engine_s5b.csv \
+        --report tests/parity_report_s5b.md
 ```
 
 This validates the frozen-spec reading itself: `tests/reference_engine.py` is a

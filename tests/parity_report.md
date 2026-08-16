@@ -1,11 +1,13 @@
 # PARITY REPORT — ORB, Phase 1
 
-Status date: Phase 1 step 1.6 complete, step 1.7 blocked on inputs.
+Status: Phase 1 steps 1.1-1.6 complete plus the step-1.8 reference validation
+and tooling. The two runs that need bars (1.7, 1.8) are blocked on inputs.
 Regenerate the machine-checked parts with:
 
 ```bash
 python3 reference/build_canonical.py
 python3 tests/test_reference_engine.py
+python3 tests/verify_s5b_reference.py
 python3 tests/parity_orb.py --candidate reference/canonical_orb_trades.csv \
         --report tests/parity_report_selfcheck.md
 ```
@@ -58,7 +60,31 @@ identities, the 1-minute opening-range guard, 5-minute aggregation, and the full
 S5b state machine including invalidation, the volume requirement, the short
 mirror, the 11:30 entry deadline, and S5b's independence from the ORB trade.
 
-### 1.6 The comparator itself is tested
+### 1.6 The S5b reference file is validated before being trusted
+
+`tests/verify_s5b_reference.py` joins the canonical ORB list to
+`s5b_day_flags_allmult.csv` and recomputes the four-state day taxonomy that
+`round3_and_part1_report.txt` published.
+
+| state | 2008-15 | 2016-23 | 2024-26 |
+|---|---|---|---|
+| COMPLETED | 1.92 (n=413) | 2.54 (n=269) | 2.61 (n=79) |
+| LATCH-ONLY | 1.70 (n=141) | 2.76 (n=137) | 1.97 (n=34) |
+| NEAR-MISS | 0.70 (n=1047) | 0.90 (n=1167) | 1.04 (n=412) |
+| NO LATCH | 0.26 (n=123) | 0.29 (n=156) | 0.22 (n=41) |
+
+**All twelve published profit factors reproduce exactly, and the COMPLETED
+session counts match the published 413 / 269 / 79.** The join is 1:1 across all
+4,022 canonical sessions.
+
+Two things this pins for step 1.8. First, the flag columns mean what they appear
+to mean, so the file is a sound S5b state reference. Second, reproducing the
+figures required computing the profit factors on **R, not dollars**, and folding
+invalidated sessions into the band / no-band buckets rather than giving them
+their own state — both recorded in the script so the reading is not re-derived
+by hand later.
+
+### 1.7 The comparators are themselves tested
 
 `tests/parity_orb.py` was run against the canonical list (4,022/4,022 exact) and
 against a deliberately perturbed copy carrying one instance of each mismatch
@@ -66,6 +92,12 @@ archetype. It classified each into the correct category — roll offset (2), fee
 OHLC (1), one-bar-late execution (6), body filter (5), stop sequencing (7),
 session close (8), direction bug (9) — and correctly blocked on the injected
 missing trade as unknown (10).
+
+`tests/parity_s5b.py` was run against a candidate timeline reconstructed from
+the reference flags: **4,768 sessions, 0 mismatches**, including all 763
+published confirmation timestamps from `claude_s5b_hist_2008_2023.csv`. Injected
+faults (a flipped latch direction and a corrupted confirmation timestamp) were
+each detected.
 
 ---
 
@@ -84,11 +116,13 @@ in `tests/PHASE1_REPO_AUDIT.md` §C:
 `docs/PARITY_PROCEDURE.md` is the runbook for closing this the moment either
 input is available. Nothing else in Phase 1 is outstanding.
 
-**S5b state parity is likewise pending.** The correct references are
-`s5b_day_flags_allmult.csv` (4,768 sessions of latch side / band / reassertion /
-invalidation) and `claude_s5b_hist_2008_2023.csv` (763 confirmation timestamps).
-The `Failed_Counterattack_*` logs must **not** be used for this — they implement
-a different construction (seam S-5).
+**S5b state parity is likewise pending on the same two inputs.** Its reference
+data and its comparator are both ready and validated (§1.6, §1.7); what is
+missing is bars to run the classifier on. Coverage limit to expect: the day
+flags carry no pullback-activation or failure timestamps, so those two
+transitions can only be checked for ordering, not against a published value.
+The `Failed_Counterattack_*` logs must **not** be used here — they implement a
+different construction (seam S-5).
 
 ---
 
@@ -118,6 +152,8 @@ source, never absorbed by a tolerance.
 | cross-engine agreement established | **PASS** |
 | frozen-spec implementation exists with clause traceability | **PASS** |
 | mismatch taxonomy tooling exists and is tested | **PASS** |
+| S5b reference file validated against published results | **PASS** — 12/12 published PFs reproduced |
+| S5b state comparator exists and is tested | **PASS** — 4,768 sessions, 0 mismatches on the control |
 | no dead or parked rule implemented (spec G) | **PASS** — only exits are the ORB stop and the RTH close |
 | no-lookahead / no repainting | **PASS by construction** — completed-bar state only, `calc_on_every_tick=false`, S5b never read by the ORB path; to be re-verified on a live chart at 1.7 |
 | Pine-vs-canonical trade-list parity | **NOT RUN** — blocked, see §2 |
