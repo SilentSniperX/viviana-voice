@@ -28,7 +28,7 @@
 
 strategy(
      title                  = "NQ ORB + S5b v1",
-     shorttitle             = "NQ_ORB_S5B_V1",
+     shorttitle             = "NQ_ORB_S5B",   // max 10 chars
      overlay                = true,
      pyramiding             = 0,
      initial_capital        = 100000,
@@ -39,7 +39,8 @@ strategy(
      process_orders_on_close= false,
      close_entries_rule     = "ANY",
      commission_type        = strategy.commission.cash_per_contract,
-     commission_value       = 0.0)
+     commission_value       = 0.0,
+     max_labels_count       = 500)
 
 // -----------------------------------------------------------------------------
 // Frozen constants — spec sections B and C. These are NOT inputs on purpose:
@@ -405,10 +406,10 @@ alignmentStr = s5bStateN != 4 or orbSide == 0 ? "UNRESOLVED" :
 sym        = alertSymbol == "" ? syminfo.ticker : alertSymbol
 sessionKey = str.tostring(nyDate)
 
-f_signalId(evt) =>
+f_signalId(string evt) =>
     "nq_orb_s5b_v1|" + sym + "|" + sessionKey + "|" + evt + "|" + str.tostring(time)
 
-f_payload(evt, dir, px, stp) =>
+f_payload(string evt, string dir, float px, float stp) =>
     '{"strategy_version":"nq_orb_s5b_v1"' +
      ',"signal_id":"'   + f_signalId(evt) + '"' +
      ',"event":"'       + evt + '"' +
@@ -497,12 +498,13 @@ plotshape(showLabels and entryTs == time and orbSide == 1,  "ORB long entry",
           shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.small)
 plotshape(showLabels and entryTs == time and orbSide == -1, "ORB short entry",
           shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.small)
-plotshape(showLabels and evtStop,  "ORB stop hit", shape.xcross,
-          orbSide == 1 ? location.belowbar : location.abovebar,
+// `location` must be a compile-time constant, so these are fixed rather than
+// chosen per trade direction: the stop marker always sits below the bar and the
+// session-close marker always above it.
+plotshape(showLabels and evtStop,  "ORB stop hit", shape.xcross, location.belowbar,
           color.new(color.red, 0), size = size.tiny)
 plotshape(showLabels and evtClose, "Session close exit", shape.square,
-          orbSide == 1 ? location.abovebar : location.belowbar,
-          color.new(color.gray, 0), size = size.tiny)
+          location.abovebar, color.new(color.gray, 0), size = size.tiny)
 
 if showConviction and (evtS5bLong or evtS5bShort)
     label.new(bar_index, evtS5bLong ? low : high,
