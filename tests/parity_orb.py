@@ -204,9 +204,16 @@ def classify(can: dict, cand: dict, diffs: list[str]) -> tuple[int, str]:
 
 
 def compare(canonical: list[dict], candidate: list[dict],
-            price_tol: float) -> tuple[list[dict], Counter]:
+            price_tol: float, auto_window: bool = False) -> tuple[list[dict], Counter]:
     can = {r["date"]: r for r in canonical}
     cand = {r["date"]: r for r in candidate}
+    if auto_window and cand:
+        # Restrict the canonical side to the span the candidate actually covers.
+        # Without this, partial data coverage reports every out-of-window
+        # canonical trade as a missing-trade blocker, which is noise, not a
+        # finding. The window is stated in the report.
+        lo, hi = min(cand), max(cand)
+        can = {d: r for d, r in can.items() if lo <= d <= hi}
     findings: list[dict] = []
     counts: Counter = Counter()
 
@@ -305,6 +312,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--canonical", default=CANONICAL)
     ap.add_argument("--price-tolerance", type=float, default=0.0,
                     help="price tolerance in points (default 0 = exact)")
+    ap.add_argument("--auto-window", action="store_true",
+                    help="compare only over the date span the candidate covers "
+                         "(use when the raw data is a subset of 2008-2026)")
     ap.add_argument("--report", default=os.path.join(REPO, "tests", "parity_report.md"))
     a = ap.parse_args(argv)
 
@@ -316,7 +326,11 @@ def main(argv: list[str]) -> int:
         candidate = from_tv_export(a.tv_export)
         source = a.tv_export
 
-    findings, counts = compare(canonical, candidate, a.price_tolerance)
+    findings, counts = compare(canonical, candidate, a.price_tolerance,
+                               a.auto_window)
+    if a.auto_window and candidate:
+        dates = [r['date'] for r in candidate]
+        source += f"  [window {min(dates)} .. {max(dates)}]"
     write_report(a.report, findings, counts, len(canonical), len(candidate), source)
 
     print(f"canonical {len(canonical)}  candidate {len(candidate)}  "

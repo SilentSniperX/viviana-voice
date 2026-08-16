@@ -7,9 +7,7 @@ __pycache__/
 venv/
 node_modules/
 
-# generated parity reports (re-created by the checkers)
-tests/parity_report_tv_trades.md
-tests/parity_report_s5b.md
-tests/parity_report_selfcheck.md
-tests/parity_report_python.md
-tests/parity_report_tradingview.md
+# generated parity reports (re-created by the checkers).
+# tests/parity_report.md is the tracked, hand-written status document.
+tests/parity_report_*.md
+tests/_parity_run/
