@@ -329,8 +329,11 @@ def main(argv: list[str]) -> int:
     findings, counts = compare(canonical, candidate, a.price_tolerance,
                                a.auto_window)
     if a.auto_window and candidate:
-        dates = [r['date'] for r in candidate]
-        source += f"  [window {min(dates)} .. {max(dates)}]"
+        dates = [r["date"] for r in candidate]
+        lo, hi = min(dates), max(dates)
+        source += f"  [window {lo} .. {hi}]"
+        # Report the windowed denominator, not the full 2008-2026 canonical.
+        canonical = [r for r in canonical if lo <= r["date"] <= hi]
     write_report(a.report, findings, counts, len(canonical), len(candidate), source)
 
     print(f"canonical {len(canonical)}  candidate {len(candidate)}  "
