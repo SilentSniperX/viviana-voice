@@ -208,6 +208,18 @@ research/                  the original research corpus (source of truth)
 
 Everything is Python standard library — no pip installs, no pandas.
 
+## REBUILDING THIS PACKAGE
+
+This zip is reproducible from a checkout of the repo
+(`SilentSniperX/viviana-voice`, branch `claude/phase-1-audit-trade-parity-lvwv28`):
+
+```bash
+python3 tools/make_handoff_zip.py
+```
+
+It runs the three self-checks below first and refuses to package if any fails,
+then excludes `data/raw/` (licensed market data), `.git/` and caches.
+
 ## QUICK VERIFICATION (about 20 seconds, no market data needed)
 
 ```bash
