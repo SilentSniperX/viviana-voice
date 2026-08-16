@@ -1,0 +1,7 @@
+RAW NQ DATA NOT INCLUDED IN THIS ZIP TO KEEP IT SHAREABLE.
+
+Files used in the research:
+- NQ_1m_by_year_2023-2026(5).zip
+- NQ_1m_history_pre2023(1).zip
+
+Use those separately for a full clean-room rerun.

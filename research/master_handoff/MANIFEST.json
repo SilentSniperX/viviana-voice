@@ -1,0 +1,282 @@
+[
+  {
+    "path": "01_CLAUDE_ROUND3_PART1/claude_s5b_hist_2008_2023.csv",
+    "bytes": 55232,
+    "sha256": "b485f7647e5bf510dcb39152f56dceb08eedf0d787e0dea477063664823e4a48"
+  },
+  {
+    "path": "01_CLAUDE_ROUND3_PART1/round3_and_part1_report.txt",
+    "bytes": 6583,
+    "sha256": "1ba832edc68146c94818e316a59ee5854fa7603807e300252a6ee52a2ef697bd"
+  },
+  {
+    "path": "01_CLAUDE_ROUND3_PART1/round3_fork_trades.csv",
+    "bytes": 397199,
+    "sha256": "f9c8bae9fd007ca2d0629c769aa399acd66f8555e4de65569e4e82781f5755fa"
+  },
+  {
+    "path": "01_CLAUDE_ROUND3_PART1/s5b_day_flags_allmult.csv",
+    "bytes": 157229,
+    "sha256": "e7ccf6e2f2092c6e7acaa0c99083c0ec45adc5e8fdd3fb20a16c3062c884a51e"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/MANIFEST.json",
+    "bytes": 5702,
+    "sha256": "e79bf009fdc0b505145050632477411da934f55d69e111222cad65e64ea0d845"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/CLAUDE_TASK_PART1.txt",
+    "bytes": 792,
+    "sha256": "c90be71dd1d264e4ab1752a326f0e461be10c199886373c379176de5aa4487e5"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/README_PART1.md",
+    "bytes": 5272,
+    "sha256": "9147248fe4672c64fe9b61e9db60e2c660dace461b50b984cdc13f2daa1b81a5"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/S5b_concentration_findings.csv",
+    "bytes": 142,
+    "sha256": "19c92249113d8a8d803bc533c9cf39c789847706a9194e5b88491f4fccebb340"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/S5b_volume_threshold_findings.csv",
+    "bytes": 509,
+    "sha256": "d02805b9b43ac75e35431efb5222712118a08887ad3f95d179351c2b97c6949e"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/Failed_Counterattack_Continuation_v1_2008_2026.csv",
+    "bytes": 349601,
+    "sha256": "dc018df0e65cef040c884431184011092b2cb9955550d0d00cbb89633bb89be5"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/Failed_Counterattack_diagnostics.csv",
+    "bytes": 1355,
+    "sha256": "c28aa49b974a71f91245930e5c12face490b01c4edd463cd888ceca7ac3ba74d"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/Failed_Counterattack_vs_Samir_summary.csv",
+    "bytes": 1478,
+    "sha256": "30b67c0aa52836d3c5edaa0e7251caa6e03b0d9c35d93d3d05a7d0fd4824cf9c"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/Failed_Counterattack_vs_Samir_yearly.csv",
+    "bytes": 5832,
+    "sha256": "fe382a769d47e1b8519764180ec0d15bb501639ddf38e0fb5179e5f93158b9eb"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/backtest_failed_counterattack.py",
+    "bytes": 11456,
+    "sha256": "049b3a0381ef52a56d16f088d0d81b3db8de862c8df05406434da652176acd42"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/run_round2.py",
+    "bytes": 8325,
+    "sha256": "e10036b711fc3c77345816a2d7b836cdb93e0c1bb2cf881e535b9aade0a82043"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_1_S5B_INTEGRITY_CLASSIFIER/attachments/tmp_s5b_round3c.py",
+    "bytes": 5421,
+    "sha256": "aa7e7b4b64542e81dfc653e2bc172e294ac5edd3bcac8b1d143b38e7c195c7b3"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/CLAUDE_FINDINGS_USER_PASTED.txt",
+    "bytes": 3159,
+    "sha256": "80bba5e1346b95fa8ba178b249e891939893cfaf3a856e6d97fd6fc982ed434e"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/README_PART2.md",
+    "bytes": 3508,
+    "sha256": "085984c7024f6a010cb1145faa8f84735b5b8fb6ef384d8dabd0b8961431976e"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/CHATGPT_TO_CLAUDE_ROUND3_GATES.txt",
+    "bytes": 2707,
+    "sha256": "057f0565800808e833dbfb51e52f81ff90c986c9c75af4d05166995f65b791ad"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/Failed_Counterattack_1m_execution_2016_2026.csv",
+    "bytes": 298460,
+    "sha256": "aea5affef9c07a200de9688e8b5f7d9ed48c7666a463eb929fc23b05591bd38f"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/Failed_Counterattack_1m_yearly.csv",
+    "bytes": 2540,
+    "sha256": "28965aaa80349acc99b35df28bed040f70a15e04bf42adcd3ce872671e189e1b"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/Failed_Counterattack_hold_close_variant.csv",
+    "bytes": 417006,
+    "sha256": "d06f868749547d349029d03cb2b0e684d4aa48832e0be0d8cb6b9c17a99c64d3"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/NQ_collective_vs_samir_2016_2026.png",
+    "bytes": 165590,
+    "sha256": "4e3caf3a68bdf309195f7a1cb56ec67de26e4f3882bd79f3195569366701263a"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/NQ_collective_vs_samir_summary.csv",
+    "bytes": 726,
+    "sha256": "08ebfbf38fd9da524b27feae7f0f49b77ded73d87d9e3152f8abd894b0865a33"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/ORB_Collective_Management_2016_2026.csv",
+    "bytes": 306770,
+    "sha256": "4c3ab2f8079f7db0bc54085fcdd5056ee6d1c83249b09b94753d1c5f7a60f7c8"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/ORB_Collective_Management_yearly.csv",
+    "bytes": 490,
+    "sha256": "98d468191905e3187ce9a3922350132d4ae76427986f2001adc528cf8a02d57c"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/Samir_ORB_Benchmark_2016_2026.csv",
+    "bytes": 324352,
+    "sha256": "03f05d553f1676ccde600b190c4ac0ad5b5bf1664831186f83280fae9c12f6ed"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/Samir_ORB_benchmark_retest_2008_2026.csv",
+    "bytes": 560295,
+    "sha256": "f4a7ff580315a76b3550dd0529b33a14c46fe536df38ce148b75b52fe5786330"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/backtest_failed_counterattack_1m.py",
+    "bytes": 6856,
+    "sha256": "286d77ff158cd877f3acf6fc76e170de8d3e94e1e3d811a20851e6f164df8479"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/backtest_orb_collective_management.py",
+    "bytes": 5880,
+    "sha256": "25e1004b75e5cb627c4bb28da4b77ae5e8d9b5f81aa00af989ccac75aadfc5be"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/fcf_1m_rerun.log",
+    "bytes": 7188,
+    "sha256": "43bd4b314f63cd7dc907802b89d9d589199fe1ea0a2ceeabe92e8ff86f7b018d"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/RAW_DATA_REFERENCE.txt",
+    "bytes": 203,
+    "sha256": "e58330d634fb2933f9da8ca0f88138bc52f39a4c1bd485719d9b305723de72e8"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/READ_ME_FIRST.md",
+    "bytes": 3935,
+    "sha256": "deeb2d9f5e2e66c06deac85cab79cc2f4d769c5493ce45f361bdc3bee390710b"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/REFERENCE/NQ_Three_Strategy_Vault_Aug2026.pdf",
+    "bytes": 186772,
+    "sha256": "3c0654fb08d1216cc45abd4baa3ec77b00c0c288b7d7148710f8ee84aa45d6cc"
+  },
+  {
+    "path": "02_CHATGPT_DUAL_PROJECT_HANDOFF/TRADINGVIEW_TARGET.md",
+    "bytes": 963,
+    "sha256": "3893129719ba9704db0e80bcd1ebe86342ab70875e516c0362c6ca40aaa63bfc"
+  },
+  {
+    "path": "03_ROUND4_NO_LATCH/CHATGPT_TO_CLAUDE_ROUND4_NO_LATCH_GATES.txt",
+    "bytes": 5664,
+    "sha256": "d3549303720f4e10ee4f003731d820d46059a18455075cafb3edddb22aa6e3ef"
+  },
+  {
+    "path": "03_ROUND4_NO_LATCH/Round4_latch_timing_only.csv",
+    "bytes": 322,
+    "sha256": "9785a16b9d3e4d0f6fb2560adbe6a6f38ac918ebb7bfb34cd2af0bf708514e83"
+  },
+  {
+    "path": "04_STRATEGY_VAULT/NQ_Three_Strategy_Vault.docx",
+    "bytes": 45554,
+    "sha256": "30955a2301569e64b313f35bd3d3c4c6b988d9c324cff5fe79c18c2eabe51200"
+  },
+  {
+    "path": "04_STRATEGY_VAULT/NQ_Three_Strategy_Vault_Aug2026.pdf",
+    "bytes": 186772,
+    "sha256": "3c0654fb08d1216cc45abd4baa3ec77b00c0c288b7d7148710f8ee84aa45d6cc"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_1m_execution_2016_2026.csv",
+    "bytes": 298460,
+    "sha256": "aea5affef9c07a200de9688e8b5f7d9ed48c7666a463eb929fc23b05591bd38f"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_1m_yearly.csv",
+    "bytes": 2540,
+    "sha256": "28965aaa80349acc99b35df28bed040f70a15e04bf42adcd3ce872671e189e1b"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_Continuation_v1_2008_2026.csv",
+    "bytes": 349601,
+    "sha256": "dc018df0e65cef040c884431184011092b2cb9955550d0d00cbb89633bb89be5"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_diagnostics.csv",
+    "bytes": 1355,
+    "sha256": "c28aa49b974a71f91245930e5c12face490b01c4edd463cd888ceca7ac3ba74d"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_hold_close_variant.csv",
+    "bytes": 417006,
+    "sha256": "d06f868749547d349029d03cb2b0e684d4aa48832e0be0d8cb6b9c17a99c64d3"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_vs_Samir_summary.csv",
+    "bytes": 1478,
+    "sha256": "30b67c0aa52836d3c5edaa0e7251caa6e03b0d9c35d93d3d05a7d0fd4824cf9c"
+  },
+  {
+    "path": "05_CORRECTED_FCF/Failed_Counterattack_vs_Samir_yearly.csv",
+    "bytes": 5832,
+    "sha256": "fe382a769d47e1b8519764180ec0d15bb501639ddf38e0fb5179e5f93158b9eb"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/NQ_10_strategy_leaderboard_2024_2026.csv",
+    "bytes": 987,
+    "sha256": "93f5b24162bfc6b8e7ff526611088888d818a64b075b3c535d93d2813f68bdfd"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/NQ_collective_vs_samir_2016_2026.png",
+    "bytes": 165590,
+    "sha256": "4e3caf3a68bdf309195f7a1cb56ec67de26e4f3882bd79f3195569366701263a"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/NQ_collective_vs_samir_summary.csv",
+    "bytes": 726,
+    "sha256": "08ebfbf38fd9da524b27feae7f0f49b77ded73d87d9e3152f8abd894b0865a33"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/ORB_Collective_Management_2016_2026.csv",
+    "bytes": 306770,
+    "sha256": "4c3ab2f8079f7db0bc54085fcdd5056ee6d1c83249b09b94753d1c5f7a60f7c8"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/ORB_Collective_Management_yearly.csv",
+    "bytes": 490,
+    "sha256": "98d468191905e3187ce9a3922350132d4ae76427986f2001adc528cf8a02d57c"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/S4_Samir_Full_2016_2026.csv",
+    "bytes": 177515,
+    "sha256": "462f571473a1b987493f818122f216745e8acb1e07eac687e6c2e2b6ff9f25e2"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/S4_Samir_ORB_EquityCurve_2016_2026.png",
+    "bytes": 110363,
+    "sha256": "37a657aa300ea67f870058cc99f75eb212897044198e4bcf11e4fd0259f9f8e4"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/S5_PressureContinuation_Proxy.csv",
+    "bytes": 4138,
+    "sha256": "c6574dbbbef5633cead508f1b7d4c5ea0462262664895c96ddd271be59de205a"
+  },
+  {
+    "path": "06_REFERENCE_SUMMARIES/Samir_ORB_Benchmark_2016_2026.csv",
+    "bytes": 324352,
+    "sha256": "03f05d553f1676ccde600b190c4ac0ad5b5bf1664831186f83280fae9c12f6ed"
+  },
+  {
+    "path": "READ_ME_FIRST.md",
+    "bytes": 2341,
+    "sha256": "2ffb267d76ded170d89cfce1ae51b69d0656dca288b8fdced46b503228a7f17b"
+  }
+]

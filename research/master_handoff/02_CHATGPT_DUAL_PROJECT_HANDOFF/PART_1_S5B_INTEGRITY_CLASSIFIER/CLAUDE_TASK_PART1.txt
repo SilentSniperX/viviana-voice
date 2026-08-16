@@ -1,0 +1,16 @@
+CLAUDE — PART 1 TASK
+
+Keep this workstream active independently of the ORB integration work.
+
+Audit S5b as the ten-trader DAY-CLASSIFIER / continuation-quality signal.
+
+Priority:
+1. Export your 749-trade 2008–2023 S5b log and resolve the 749 vs 741 ChatGPT parity gap.
+2. Run a matched-event/placebo test for S5b's ability to identify outsized continuation days.
+3. Quantify top-1/top-3/top-5/top-10 contribution and removal diagnostics.
+4. Account for the volume-multiplier search axis; do not select a new best threshold.
+5. Run adjacent-cell sensitivity only to identify cliffs, not optimize.
+6. Return what can be represented causally in TradingView as a classifier/state machine.
+
+Do NOT drop this because the ORB integration project is also running.
+The projects are complementary.

@@ -1,0 +1,170 @@
+{
+  "built_by": "reference/build_canonical.py",
+  "strategy_version": "nq_orb_s5b_v1",
+  "spec": "spec/STRATEGY_SPEC_FROZEN.md section B (ORB)",
+  "sources": {
+    "PRIMARY": {
+      "path": "research/master_handoff/02_CHATGPT_DUAL_PROJECT_HANDOFF/PART_2_ORB_S5B_INTEGRATION/attachments/Samir_ORB_benchmark_retest_2008_2026.csv",
+      "sha256": "f4a7ff580315a76b3550dd0529b33a14c46fe536df38ce148b75b52fe5786330",
+      "rows": 4022
+    },
+    "CONFIRM_A": {
+      "path": "research/reference/Samir_ORB_Benchmark_2016_2026.csv",
+      "sha256": "03f05d553f1676ccde600b190c4ac0ad5b5bf1664831186f83280fae9c12f6ed",
+      "rows": 2295
+    },
+    "CONFIRM_B": {
+      "path": "research/latest_round4/round4_trades.csv",
+      "sha256": "7f4ed4e2d83d79d6abf54f9d8dee0726b03ef8ffe26da645cdd0cc115c885dc3",
+      "rows": 4019
+    },
+    "LEGACY_NOT_USED": {
+      "path": "research/master_handoff/06_REFERENCE_SUMMARIES/S4_Samir_Full_2016_2026.csv",
+      "sha256": "462f571473a1b987493f818122f216745e8acb1e07eac687e6c2e2b6ff9f25e2",
+      "rows": 2226
+    }
+  },
+  "canonical": {
+    "path": "reference/canonical_orb_trades.csv",
+    "rows": 4022,
+    "sha256": "caeb2998c86a40aeff5ee98dbb1ebdfeb01584680011e6a0b86d655a0fdc6b0c",
+    "cross_engine": {
+      "VERIFIED_5M_AND_1M": 4019,
+      "VERIFIED_5M_ONLY": 3
+    }
+  },
+  "spec_invariant_failures": {},
+  "primary_stats": {
+    "rows": 4022,
+    "unique_dates": 4022,
+    "first_date": "2008-01-02",
+    "last_date": "2026-06-30",
+    "reasons": {
+      "close": 2230,
+      "stop": 1792
+    },
+    "signal_time_histogram": {
+      "09:45": 1067,
+      "09:50": 768,
+      "09:55": 479,
+      "10:00": 492,
+      "10:05": 319,
+      "10:10": 246,
+      "10:15": 214,
+      "10:20": 169,
+      "10:25": 150,
+      "10:30": 118
+    },
+    "close_exit_time_histogram": {
+      "11:25": 28,
+      "12:55": 40,
+      "13:10": 20,
+      "15:55": 2142
+    },
+    "stop_on_entry_bar": 8
+  },
+  "cross_check_A_benchmark_2016plus": {
+    "compared_dates": 2295,
+    "only_in_primary_2016plus": [],
+    "only_in_benchmark": [],
+    "field_diffs": [],
+    "field_diff_count": 0,
+    "float_repr_only_diffs": 547,
+    "identical": true
+  },
+  "cross_check_B_round4_1m_engine": {
+    "shared_dates": 4019,
+    "only_in_primary": [
+      "2008-05-26",
+      "2011-05-30",
+      "2011-07-04"
+    ],
+    "only_in_round4": [],
+    "entry_side_diffs": [],
+    "entry_side_diff_count": 0,
+    "exit_classification": {
+      "close_1m_inside_5m_bar": 1884,
+      "stop_1m_inside_5m_bar": 1413,
+      "excluded_dead_round4_rule": 722
+    },
+    "exit_examples": []
+  },
+  "legacy_S4_conflict": {
+    "legacy_rows": 2226,
+    "shared_dates": 2226,
+    "only_in_primary_2016plus": 69,
+    "only_in_legacy": 0,
+    "direction_diffs": 0,
+    "risk_diffs": 2226,
+    "exit_reason_diffs": 2,
+    "netR_diffs": 2222,
+    "risk_examples": [
+      [
+        "2016-01-04",
+        "34.75",
+        "35.0"
+      ],
+      [
+        "2016-01-05",
+        "22.0",
+        "22.25"
+      ],
+      [
+        "2016-01-06",
+        "29.5",
+        "29.75"
+      ],
+      [
+        "2016-01-08",
+        "30.5",
+        "30.75"
+      ],
+      [
+        "2016-01-11",
+        "30.0",
+        "30.25"
+      ]
+    ]
+  },
+  "performance": {
+    "2008-2026": {
+      "trades": 4022,
+      "netR": 66.8661,
+      "PF": 1.0771,
+      "maxDD_R": -115.3116,
+      "win_pct": 42.59
+    },
+    "2008-2015": {
+      "trades": 1727,
+      "netR": -55.9506,
+      "PF": 0.9175,
+      "maxDD_R": -96.1865,
+      "win_pct": 40.53
+    },
+    "2016-2026": {
+      "trades": 2295,
+      "netR": 122.8167,
+      "PF": 1.1035,
+      "maxDD_R": -25.647,
+      "win_pct": 44.14
+    },
+    "2016-2023": {
+      "trades": 1729,
+      "netR": 78.9509,
+      "PF": 1.0915,
+      "maxDD_R": -25.647,
+      "win_pct": 43.84
+    },
+    "2024-2026": {
+      "trades": 566,
+      "netR": 43.8658,
+      "PF": 1.1235,
+      "maxDD_R": -16.4635,
+      "win_pct": 45.05
+    }
+  },
+  "constants": {
+    "cost_points": 0.75,
+    "point_value": 20.0
+  }
+}

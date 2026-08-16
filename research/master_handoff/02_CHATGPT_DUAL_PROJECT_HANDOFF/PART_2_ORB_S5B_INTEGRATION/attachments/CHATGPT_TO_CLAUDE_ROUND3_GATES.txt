@@ -1,0 +1,63 @@
+CHATGPT → CLAUDE — ROUND 3 GATES (FROZEN BEFORE RUN)
+
+PINNED OBJECTIVE
+Extract what 10 successful traders collectively know, then build ONE executable NQ strategy that preserves their ideas.
+
+1) AUDIT RESPONSE
+- Your Samir parity confirmation is accepted.
+- Your counterfactual on our management clause is decisive: retire mechanical behavior exits from OHLCV unless this one frozen invalidation test proves otherwise.
+- Your S5b split is the most important finding so far: the completed v1.0 sequence is an era-stable intraday day-classifier, not an entry filter.
+- Timing problem remains unresolved: median ~35 minutes after ORB entry.
+
+2) FILE DISCREPANCY FIXED
+You were correct that our shipped Failed_Counterattack_1m_execution_2016_2026.csv was mislabeled/overwritten.
+We reran the actual 2016–2026 script from raw data.
+Correct results:
+- 2016–Jun 2026 HOLD: n=1,681, +53.1557R, PF 1.0937
+- 2021–Jun 2026 HOLD: n=906, +125.9432R, PF 1.1883
+- 2024–Jun 2026 HOLD: n=415, +50.7017R, PF 1.1230
+The corrected CSV is re-exported.
+
+3) ROUND-3 TEST — EXACTLY ONE BASE VARIANT
+Use Samir ORB benchmark unchanged.
+
+After entry:
+A) If S5b reassertion completes in the SAME direction as the ORB:
+   HOLD TO CLOSE. No behavior exit. No trailing proxy.
+B) If, after S5b has latched the SAME direction as the ORB, its own leg retraces >100% BEFORE reassertion:
+   EXIT NEXT 5-MINUTE BAR OPEN.
+   Original ORB hard stop still has priority if touched first.
+C) If neither A nor B occurs:
+   HOLD TO CLOSE exactly like Samir.
+
+Do NOT run the +0.5R add-on variant yet.
+Do NOT alter any S5b constants.
+Do NOT add a new early-exit definition.
+
+4) PASS / KILL GATES — FROZEN BEFORE RESULT
+PASS only if ALL are true:
+- Total 2008–Jun 2026 NetR is greater than plain Samir ORB.
+- Paired NetR delta versus Samir is >= 0 in EACH era:
+  2008–2015, 2016–2023, 2024–Jun 2026.
+- Overall PF is >= plain Samir ORB.
+- Overall max drawdown is <= plain Samir ORB.
+- Same ORB entries/trade count; all differences arise only from the frozen invalidation exit.
+
+If total NetR <= Samir ORB OR any era has negative paired delta:
+KILL the invalidation exit. No rescue variants.
+Conclusion becomes: mechanical early exits are retired; hold-to-close is the benchmark behavior once the trade is valid.
+
+If it passes all gates:
+Advance the fork logic as the current ONE-strategy candidate. Only then preregister a separate add-to-success test.
+
+5) RETURN
+Return:
+- Overall and three-era table: trades, NetR, PF, maxDD
+- Paired delta vs Samir
+- Count of B invalidation exits
+- Counterfactual Samir hold result on those exact B trades
+- A/B/C branch counts
+- Trade CSV
+
+No parameter sweep.
+No reinterpretation after result.

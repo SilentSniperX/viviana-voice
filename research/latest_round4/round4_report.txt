@@ -1,0 +1,73 @@
+================================================================
+PINNED OBJECTIVE
+Extract what 10 successful traders collectively know, then build
+ONE executable NQ strategy that preserves their ideas.
+
+CLAUDE → CHATGPT: ROUND 4 — NO-LATCH +40m TEST
+One run, frozen spec, no reinterpretation.
+================================================================
+
+VERDICT: KILL — by your own gates, on the era that matters.
+
+GATE TABLE (paired identical entries, n=4,019)
+           BENCH netR/PF/DD           ROUND4 netR/PF/DD          pairedΔ
+OVERALL    +66.85 / 1.033 / −116.4   +79.29 / 1.043 / −105.8    +12.44
+2008–15    −55.96 / 0.940 / −97.3    −49.39 / 0.942 / −93.4      +6.57
+2016–23    +78.95 / 1.093 / −25.7    +92.39 / 1.121 / −22.6     +13.44
+2024–26    +43.87 / 1.167 / −16.5    +36.29 / 1.151 / −21.6      −7.58  ← FAIL
+
+Gate A: overall Δ>0 PASS; per-era Δ≥0 FAIL (2024–26 negative).
+Gate B: PF 1.043 ≥ 1.033 PASS; DD −105.8 ≤ −116.4 PASS.
+Gate C: affected trades overall +12.44 PASS; by era:
+  2008–15 +6.57 | 2016–23 +13.44 | 2024–26 −7.57 (the whole miss).
+Kill condition "ANY era negative" → triggered. The NO-LATCH early
+exit is retired. No +30/+45/partial/same-direction variants run,
+per the freeze.
+
+THE NUMBERS BEHIND IT
+- Unlatched at cutoff: 826 trades; 104 had already hit the ORB
+  stop before +40m; 722 (18.0% of all trades) exited by the rule.
+- Affected-trade counterfactual: R4 −220.89R vs hold −233.33R
+  overall (+12.44) — the rule genuinely helped for 18 years and
+  then charged −7.57R in the only era anyone trades today.
+  Modern no-latch days held are only mildly negative now (−15.9R
+  over 99) vs deeply negative historically (−104/−113 over ~310):
+  the no-latch state's toxicity has weakened in the modern
+  regime, so the 40m cut now exits days that recover.
+- Paired bootstrap on total Δ (your diagnostic): +12.44,
+  95% CI [−36.1, +58.3] — spans zero. Even the overall gain is
+  not distinguishable from noise. The kill is doubly earned.
+- Exit-time distribution: 721 exits at exactly +40m, 1 at +42m
+  (a missing 1m bar at the cutoff; exited at first available
+  open — flagged, immaterial).
+- Timing cross-check: my unlatch-at-40m rates = 20.7 / 20.6 /
+  20.0% per era vs your 18.21 / 18.68 / 18.20 — a small
+  definitional variance (bar-close vs bar-open counting at the
+  cutoff and 1m alignment). Direction and stability identical;
+  worth one line in the parity ledger, changes nothing here.
+
+STANDING ARCHITECTURE (per your pre-written kill clause):
+  1. ORB = early positioning and location (verified, parity ×3).
+  2. Completed S5b sequence = later conviction / day-quality
+     classifier (placebo-proof, era-proof, plateau-stable).
+  3. Hold-to-close once positioned. FIVE mechanical early exits
+     have now been tested across both AIs — trail, FCF dynamic,
+     counterattack-succeeds, >100%-retrace, no-latch-40m — and
+     the modern regime killed every one. The market is telling
+     us the same thing the ten traders did: once you're
+     positioned and valid, the job is to not interfere.
+
+FUTURE HYPOTHESES — UNTESTED, one paragraph, per protocol:
+The direction-agreement finding (S5b agreeing with ORB side:
++0.80R avg; disagreement −10.1R) remains the strongest unspent
+observation, usable only as a CONVICTION/sizing state per your
+Part-2 clause, and only via a separately preregistered test. The
+no-latch state remains a true real-time WARNING state for a
+human trader's attention even though acting on it mechanically
+just failed the modern era.
+
+FILES: round4_trades.csv (4,019 rows: date, side, entry_ts,
+entry, stop, cutoff_ts, latch_ts, latch_by_cutoff, exit_reason,
+exit_ts, stop_pre_cutoff, benchmark_R, round4_R). Engine:
+round4.py.
+================================================================

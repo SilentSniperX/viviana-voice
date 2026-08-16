@@ -1,0 +1,543 @@
+//@version=6
+// =============================================================================
+// NQ ORB + S5b v1  —  FROZEN SPEC IMPLEMENTATION
+// =============================================================================
+// Implements spec/STRATEGY_SPEC_FROZEN.md exactly. Every rule below is tagged
+// with the spec section it comes from. Nothing here optimises, filters or
+// re-times anything relative to the frozen research engines.
+//
+//   Section B : ORB — early positioning engine (the only order-generating part)
+//   Section C : S5b — Failed Counterattack conviction CLASSIFIER (no orders)
+//   Section D : relationship / alignment state
+//   Section E : visuals
+//   Section F : alert events
+//   Section G : DEAD and PARKED rules — deliberately absent
+//
+// Python twin: tests/reference_engine.py (same clause tags, same branches).
+// Canonical trade list: reference/canonical_orb_trades.csv
+//
+// CHART REQUIREMENTS (docs/PARITY_PROCEDURE.md)
+//   symbol    : NQ1! / MNQ1! (continuous) or the contract being traded
+//   timeframe : 5 minutes  (the frozen engines are 5m; see CROSS_ENGINE_AUDIT)
+//   session   : regular trading hours, America/New_York
+//
+// NO-LOOKAHEAD: every decision below reads only completed-bar values of the
+// current or earlier bars. `barstate.isconfirmed` gates all state transitions
+// so that historical and realtime behaviour are identical.
+// =============================================================================
+
+strategy(
+     title                  = "NQ ORB + S5b v1",
+     shorttitle             = "NQ_ORB_S5B_V1",
+     overlay                = true,
+     pyramiding             = 0,
+     initial_capital        = 100000,
+     default_qty_type       = strategy.fixed,
+     default_qty_value      = 1,
+     calc_on_every_tick     = false,
+     calc_on_order_fills    = false,
+     process_orders_on_close= false,
+     close_entries_rule     = "ANY",
+     commission_type        = strategy.commission.cash_per_contract,
+     commission_value       = 0.0)
+
+// -----------------------------------------------------------------------------
+// Frozen constants — spec sections B and C. These are NOT inputs on purpose:
+// CLAUDE.md "DO NOT CHANGE" lists every one of them.
+// -----------------------------------------------------------------------------
+TZ              = "America/New_York"
+BODY_FILTER     = 0.50      // B: body / full range >= 0.50
+OR_OPEN_MIN     = 570       // B: 09:30 in NY minutes-of-day
+OR_END_MIN      = 585       // B: opening range ends 09:44:59 (exclusive 09:45)
+QUAL_START_MIN  = 585       // B: qualification window 09:45 ..
+QUAL_END_MIN    = 630       // .. 10:30 inclusive (bar OPEN time)
+OB_END_MIN      = 600       // C: S5b opening balance 09:30-09:59
+LATCH_FROM_MIN  = 600       // C: latch scan starts with the 10:00 bar
+S5B_DEADLINE    = 690       // C: no standalone S5b entries after the 11:30 bar
+BAND_LO         = 0.25      // C.4
+BAND_HI         = 0.75      // C.4
+INVALID_RETR    = 1.00      // C.5
+FAIL_TOL        = 1.0       // C.6: 1.0 point tolerance
+VOL_MULT        = 1.2       // C.7
+VOL_LEN         = 12        // C.7: rolling 12-bar mean volume
+VOL_MIN_OBS     = 6         // C.7: mean may begin with 6 observations
+
+// Display-only inputs. None of these can change a signal, a price or a state.
+grpV            = "Display"
+showOR          = input.bool(true,  "Show ORH / ORL",                group = grpV)
+showOB          = input.bool(true,  "Show S5b opening balance",      group = grpV)
+showLabels      = input.bool(true,  "Show state labels",             group = grpV)
+showConviction  = input.bool(true,  "Show HIGH CONVICTION banner",   group = grpV)
+grpA            = "Alerts"
+alertSymbol     = input.string("", "Alert symbol override (blank = chart symbol)", group = grpA)
+
+// =============================================================================
+// SESSION FRAME
+// =============================================================================
+nyMinute        = hour(time, TZ) * 60 + minute(time, TZ)
+nyDate          = year(time, TZ) * 10000 + month(time, TZ) * 100 + dayofmonth(time, TZ)
+isNewSession    = nyDate != nz(nyDate[1], -1)
+// The final bar of the exchange's regular session. This is exchange-driven, so
+// shortened holiday sessions resolve correctly (the reference logs contain
+// 11:25 / 12:55 / 13:10 close bars — see reference/CROSS_ENGINE_AUDIT.md).
+isSessionLast   = session.islastbar_regular
+
+// =============================================================================
+// SECTION B — ORB
+// =============================================================================
+var float orH          = na
+var float orL          = na
+var bool  orLocked     = false
+var int   orBarCount   = 0
+
+var int   orbSide      = 0          // 0 none, 1 long, -1 short
+var int   signalBarTs  = na
+var bool  pendingEntry = false
+var bool  tradeTaken   = false      // B: one trade per day
+var bool  daySettled   = false
+
+var float entryPx      = na
+var float stopPx       = na
+var int   entryTs      = na
+var float exitPx       = na
+var int   exitTs       = na
+var string exitReason  = ""
+
+if isNewSession
+    orH          := na
+    orL          := na
+    orLocked     := false
+    orBarCount   := 0
+    orbSide      := 0
+    signalBarTs  := na
+    pendingEntry := false
+    tradeTaken   := false
+    daySettled   := false
+    entryPx      := na
+    stopPx       := na
+    entryTs      := na
+    exitPx       := na
+    exitTs       := na
+    exitReason   := ""
+
+inOrWindow   = nyMinute >= OR_OPEN_MIN and nyMinute <  OR_END_MIN
+inQualWindow = nyMinute >= QUAL_START_MIN and nyMinute <= QUAL_END_MIN
+inPosition   = strategy.position_size != 0
+
+// --- opening range 09:30:00 - 09:44:59 (B) -----------------------------------
+if inOrWindow and barstate.isconfirmed
+    orH        := na(orH) ? high : math.max(orH, high)
+    orL        := na(orL) ? low  : math.min(orL, low)
+    orBarCount += 1
+// The range is locked the moment the window ends; nothing may widen it later.
+if not inOrWindow and nyMinute >= OR_END_MIN and orBarCount > 0
+    orLocked := true
+
+// B: body / full range >= 0.50. A zero-range bar has an undefined body
+// fraction and can never qualify — same as the NaN comparison in the research
+// engines (`tr.replace(0, nan)`).
+barRange     = high - low
+bodyFrac     = barRange > 0 ? math.abs(close - open) / barRange : na
+bodyQualifies= not na(bodyFrac) and bodyFrac >= BODY_FILTER
+
+orReady      = orLocked and orBarCount >= 3 and not na(orH) and not na(orL)
+
+// --- first qualified breakout (B) ---------------------------------------------
+longBreak    = orReady and bodyQualifies and close > orH
+shortBreak   = orReady and bodyQualifies and close < orL
+
+// `daySettled` is part of this guard: once the first qualified signal has been
+// taken, skipped or abandoned, the session is finished. The reference engine
+// returns after the first qualified bar and never looks for a second one.
+if barstate.isconfirmed and inQualWindow and orbSide == 0 and not tradeTaken and not pendingEntry and not daySettled
+    if longBreak                                    // B: first qualified direction wins
+        orbSide      := 1
+        signalBarTs  := time
+        pendingEntry := true
+    else if shortBreak
+        orbSide      := -1
+        signalBarTs  := time
+        pendingEntry := true
+    if pendingEntry
+        // Orders are submitted on the SIGNAL bar so that TradingView's fill
+        // model executes them at the next bar's open — the frozen next-bar
+        // execution semantic. The protective stop is submitted at the same
+        // time so it is already live on the entry bar itself (the canonical
+        // list contains 8 same-bar stop resolutions).
+        plannedStop = orbSide == 1 ? orL : orH
+        if orbSide == 1
+            strategy.entry("ORB_LONG", strategy.long, comment = "ORB_LONG_ENTRY")
+            strategy.exit("ORB_STOP_L", from_entry = "ORB_LONG", stop = plannedStop,
+                          comment = "ORB_STOP")
+        else
+            strategy.entry("ORB_SHORT", strategy.short, comment = "ORB_SHORT_ENTRY")
+            strategy.exit("ORB_STOP_S", from_entry = "ORB_SHORT", stop = plannedStop,
+                          comment = "ORB_STOP")
+
+// --- entry on the next 5m bar open (B) ----------------------------------------
+// The research engines skip the trade when the bar exactly 5 minutes after the
+// signal bar is missing from the data. `time - signalBarTs == 300000` reproduces
+// that guard: a gap makes the difference larger and the trade is abandoned.
+barIsNextAfterSignal = pendingEntry and not na(signalBarTs) and (time - signalBarTs) == 300000
+
+// Evaluated on the confirmed bar so that historical and realtime transitions are
+// identical (spec/PARITY_ACCEPTANCE_GATES.md, no-lookahead). The recorded entry
+// price is the bar's OPEN either way — it is fixed from the bar's first tick.
+if pendingEntry and barstate.isconfirmed
+    if barIsNextAfterSignal
+        candidateEntry = open
+        candidateStop  = orbSide == 1 ? orL : orH
+        // B: "If next-bar entry is already beyond the stop/invalidation, SKIP."
+        skip = (orbSide ==  1 and candidateEntry <= candidateStop) or
+               (orbSide == -1 and candidateEntry >= candidateStop) or
+               math.abs(candidateEntry - candidateStop) <= 0
+        if skip
+            // The deterministic record takes no trade. The already-submitted
+            // TradingView order is withdrawn/flattened; see the fill-model
+            // seam noted in tests/parity_report.md.
+            orbSide      := 0
+            pendingEntry := false
+            daySettled   := true
+            strategy.cancel_all()
+            strategy.close_all(comment = "ORB_SKIPPED")
+        else
+            entryPx      := candidateEntry
+            stopPx       := candidateStop
+            entryTs      := time
+            pendingEntry := false
+            tradeTaken   := true
+    else
+        // Gap where the entry bar should have been: no trade this session.
+        orbSide      := 0
+        pendingEntry := false
+        daySettled   := true
+        strategy.cancel_all()
+        strategy.close_all(comment = "ORB_SKIPPED")
+
+// --- management: hard stop has priority, otherwise RTH close (B) --------------
+// The stop is live from the entry bar onward, including the entry bar itself
+// (the canonical list contains 8 same-bar stop resolutions).
+stopHit     = tradeTaken and not daySettled and not na(stopPx) and
+              (orbSide == 1 ? low <= stopPx : high >= stopPx)
+
+if barstate.isconfirmed and tradeTaken and not daySettled
+    if stopHit
+        exitPx     := stopPx                        // B: fill at the stop price
+        exitTs     := time
+        exitReason := "ORB_STOP"
+        daySettled := true
+    else if isSessionLast
+        exitPx     := close                         // B: exit at RTH close
+        exitTs     := time
+        exitReason := "SESSION_CLOSE_EXIT"
+        daySettled := true
+
+// B: "Otherwise exit at RTH close." TradingView fills this market order at the
+// open of the following bar (process_orders_on_close = false is required for
+// correct next-bar ENTRY semantics, which CLAUDE.md lists as DO-NOT-CHANGE).
+// The deterministic record above uses the final bar's CLOSE, which is the
+// canonical value; the strategy-tester fill is a known reporting seam.
+if isSessionLast and inPosition
+    strategy.close_all(comment = "SESSION_CLOSE_EXIT")
+
+// =============================================================================
+// SECTION C — S5b classifier (state only; never places an order in v1)
+// =============================================================================
+var float obH        = na
+var float obL        = na
+var int   obBars     = 0
+var int   s5bSide    = 0
+var int   s5bStateN  = 0            // 0 WAITING 1 LATCHED 2 PULLBACK 3 FAILURE 4 CONFIRMED 5 INVALIDATED
+var float legHigh    = na
+var float legLow     = na
+var bool  pullActive = false
+var int   pullStartIdx = na
+var int   sessionIdx = 0
+var int   latchTs    = na
+var int   pullbackTs = na
+var int   failureTs  = na
+var int   confirmTs  = na
+var int   invalidTs  = na
+var bool  s5bDone    = false
+var float sessHigh   = na
+var float sessLow    = na
+var float volSum     = 0.0
+var int   volN       = 0
+
+if isNewSession
+    volSum       := 0.0
+    volN         := 0
+    obH          := na
+    obL          := na
+    obBars       := 0
+    s5bSide      := 0
+    s5bStateN    := 0
+    legHigh      := na
+    legLow       := na
+    pullActive   := false
+    pullStartIdx := na
+    sessionIdx   := 0
+    latchTs      := na
+    pullbackTs   := na
+    failureTs    := na
+    confirmTs    := na
+    invalidTs    := na
+    s5bDone      := false
+    sessHigh     := na
+    sessLow      := na
+
+inRth = nyMinute >= OR_OPEN_MIN and nyMinute < 960     // 09:30 .. 15:59
+
+if barstate.isconfirmed and inRth
+    sessionIdx += 1
+    sessHigh   := na(sessHigh) ? high : math.max(sessHigh, high)
+    sessLow    := na(sessLow)  ? low  : math.min(sessLow,  low)
+
+// C: opening balance = first six 5m bars, 09:30-09:59.
+if barstate.isconfirmed and inRth and nyMinute < OB_END_MIN
+    obH    := na(obH) ? high : math.max(obH, high)
+    obL    := na(obL) ? low  : math.min(obL, low)
+    obBars += 1
+
+// C.7: rolling 12-bar mean volume, session-scoped, minimum 6 observations,
+// current bar included (Round-3c reference default, vol_shift = False).
+// The window never reaches back into the previous session: `volN` is reset with
+// the session and only starts subtracting once 13 bars of this session exist.
+float volMean = na
+if barstate.isconfirmed and inRth
+    volSum := volSum + volume
+    volN   := volN + 1
+    if volN > VOL_LEN
+        volSum := volSum - nz(volume[VOL_LEN])
+        volN   := VOL_LEN
+    volMean := volN >= VOL_MIN_OBS ? volSum / volN : na
+
+obReady = obBars >= 6 and not na(obH) and not na(obL)
+
+if barstate.isconfirmed and inRth and obReady and not s5bDone and nyMinute >= LATCH_FROM_MIN
+    if s5bSide == 0
+        // C: first close beyond OBH/OBL latches direction; first one wins.
+        if close > obH
+            s5bSide := 1
+        else if close < obL
+            s5bSide := -1
+        if s5bSide != 0
+            s5bStateN := 1
+            latchTs   := time
+            // C.1/C.2: leg extremes = session extremes through the latch bar.
+            legLow    := sessLow
+            legHigh   := sessHigh
+    else
+        madeNewExtreme = s5bSide == 1 ? high > legHigh : low < legLow
+        if s5bSide == 1
+            legHigh := math.max(legHigh, high)
+        else
+            legLow  := math.min(legLow, low)
+        leg = legHigh - legLow
+        if leg > 0
+            // C.3: retracement of the developing leg.
+            retr = s5bSide == 1 ? (legHigh - low) / leg : (high - legLow) / leg
+            if retr > INVALID_RETR
+                // C.5: invalidates the S5b STATE only — never an ORB exit.
+                s5bStateN := 5
+                invalidTs := time
+                s5bDone   := true
+            else
+                if retr >= BAND_LO and retr <= BAND_HI and not pullActive and not madeNewExtreme
+                    pullActive   := true
+                    pullStartIdx := sessionIdx
+                    pullbackTs   := time
+                    s5bStateN    := 2
+                if pullActive and (sessionIdx - pullStartIdx) >= 2 and sessionIdx >= 3
+                    // C.6: two consecutive bars with no meaningful new progress.
+                    failCond = s5bSide == 1 ?
+                         (low  >= low[1]  - FAIL_TOL and low[1]  >= low[2]  - FAIL_TOL) :
+                         (high <= high[1] + FAIL_TOL and high[1] <= high[2] + FAIL_TOL)
+                    // C.7: reassertion / pressure bar.
+                    resume = s5bSide == 1 ?
+                         (close > high[1] and close > open) :
+                         (close < low[1]  and close < open)
+                    pressure = not na(volMean) and volume >= VOL_MULT * volMean
+                    if failCond and na(failureTs)
+                        failureTs := time
+                        if s5bStateN == 2
+                            s5bStateN := 3
+                    if failCond and resume and pressure
+                        // C.8: pullback + failure + reassertion => CONFIRMED.
+                        s5bStateN := 4
+                        confirmTs := time
+                        s5bDone   := true
+
+s5bStateStr = s5bStateN == 0 ? "WAITING_FOR_LATCH" :
+              s5bStateN == 1 ? "LATCHED" :
+              s5bStateN == 2 ? "PULLBACK_ACTIVE" :
+              s5bStateN == 3 ? "COUNTERATTACK_FAILURE" :
+              s5bStateN == 4 ? "CONFIRMED" : "INVALIDATED"
+s5bDirStr   = s5bSide == 1 ? "LONG" : s5bSide == -1 ? "SHORT" : "NONE"
+orbDirStr   = orbSide == 1 ? "LONG" : orbSide == -1 ? "SHORT" : "NONE"
+
+// =============================================================================
+// SECTION D — relationship state
+// =============================================================================
+alignmentStr = s5bStateN != 4 or orbSide == 0 ? "UNRESOLVED" :
+               s5bSide == orbSide ? "ALIGNED" : "DISAGREEMENT"
+// S5b NEVER retroactively filters the ORB entry: `alignmentStr` is read by
+// nothing above this line.
+
+// =============================================================================
+// SECTION F — alert events
+// =============================================================================
+// A deterministic signal id: version | symbol | session date | event | bar time.
+sym        = alertSymbol == "" ? syminfo.ticker : alertSymbol
+sessionKey = str.tostring(nyDate)
+
+f_signalId(evt) =>
+    "nq_orb_s5b_v1|" + sym + "|" + sessionKey + "|" + evt + "|" + str.tostring(time)
+
+f_payload(evt, dir, px, stp) =>
+    '{"strategy_version":"nq_orb_s5b_v1"' +
+     ',"signal_id":"'   + f_signalId(evt) + '"' +
+     ',"event":"'       + evt + '"' +
+     ',"symbol":"'      + sym + '"' +
+     ',"event_time":"'  + str.format_time(time, "yyyy-MM-dd'T'HH:mm:ssZ", TZ) + '"' +
+     ',"bar_time_ms":'  + str.tostring(time) +
+     ',"session_date":"'+ str.format_time(time, "yyyy-MM-dd", TZ) + '"' +
+     ',"direction":"'   + dir + '"' +
+     ',"orb_direction":"' + orbDirStr + '"' +
+     ',"s5b_state":"'   + s5bStateStr + '"' +
+     ',"s5b_direction":"' + s5bDirStr + '"' +
+     ',"alignment":"'   + alignmentStr + '"' +
+     ',"entry":'        + (na(px)  ? "null" : str.tostring(px)) +
+     ',"stop":'         + (na(stp) ? "null" : str.tostring(stp)) +
+     ',"or_high":'      + (na(orH) ? "null" : str.tostring(orH)) +
+     ',"or_low":'       + (na(orL) ? "null" : str.tostring(orL)) +
+     ',"s5b_ob_high":'  + (na(obH) ? "null" : str.tostring(obH)) +
+     ',"s5b_ob_low":'   + (na(obL) ? "null" : str.tostring(obL)) + '}'
+
+evtOrbLong  = tradeTaken and entryTs == time and orbSide ==  1
+evtOrbShort = tradeTaken and entryTs == time and orbSide == -1
+evtStop     = exitReason == "ORB_STOP" and exitTs == time
+evtClose    = exitReason == "SESSION_CLOSE_EXIT" and exitTs == time
+evtS5bLong  = s5bStateN == 4 and confirmTs == time and s5bSide ==  1
+evtS5bShort = s5bStateN == 4 and confirmTs == time and s5bSide == -1
+
+alertcondition(evtOrbLong,  "ORB_LONG_ENTRY",      "ORB_LONG_ENTRY")
+alertcondition(evtOrbShort, "ORB_SHORT_ENTRY",     "ORB_SHORT_ENTRY")
+alertcondition(evtS5bLong,  "S5B_LONG_CONFIRMED",  "S5B_LONG_CONFIRMED")
+alertcondition(evtS5bShort, "S5B_SHORT_CONFIRMED", "S5B_SHORT_CONFIRMED")
+alertcondition(evtStop,     "ORB_STOP",            "ORB_STOP")
+alertcondition(evtClose,    "SESSION_CLOSE_EXIT",  "SESSION_CLOSE_EXIT")
+
+if evtOrbLong
+    alert(f_payload("ORB_LONG_ENTRY",  "LONG",  entryPx, stopPx), alert.freq_once_per_bar_close)
+if evtOrbShort
+    alert(f_payload("ORB_SHORT_ENTRY", "SHORT", entryPx, stopPx), alert.freq_once_per_bar_close)
+if evtS5bLong
+    alert(f_payload("S5B_LONG_CONFIRMED",  "LONG",  na, na), alert.freq_once_per_bar_close)
+if evtS5bShort
+    alert(f_payload("S5B_SHORT_CONFIRMED", "SHORT", na, na), alert.freq_once_per_bar_close)
+if evtStop
+    alert(f_payload("ORB_STOP", orbDirStr, entryPx, stopPx), alert.freq_once_per_bar_close)
+if evtClose
+    alert(f_payload("SESSION_CLOSE_EXIT", orbDirStr, entryPx, stopPx), alert.freq_once_per_bar_close)
+
+// =============================================================================
+// PARITY EXPORT SERIES
+// =============================================================================
+// These plots carry the whole deterministic record. In TradingView use
+// "Export chart data" to obtain one row per bar, then run
+//   python3 tests/parity_orb.py --tv-export <csv> --canonical reference/canonical_orb_trades.csv
+// See docs/PARITY_PROCEDURE.md. They are data-window only and draw nothing.
+exitCode = exitTs == time ? (exitReason == "ORB_STOP" ? 1 : exitReason == "SESSION_CLOSE_EXIT" ? 2 : 0) : 0
+plot(orH,                                     "px_or_high",   display = display.data_window)
+plot(orL,                                     "px_or_low",    display = display.data_window)
+plot(orbSide,                                 "px_orb_side",  display = display.data_window)
+plot(entryTs == time ? entryPx : na,          "px_entry",     display = display.data_window)
+plot(entryTs == time ? stopPx  : na,          "px_stop",      display = display.data_window)
+plot(exitTs  == time ? exitPx  : na,          "px_exit",      display = display.data_window)
+plot(exitCode,                                "px_exit_code", display = display.data_window)
+plot(s5bStateN,                               "px_s5b_state", display = display.data_window)
+plot(s5bSide,                                 "px_s5b_side",  display = display.data_window)
+plot(obH,                                     "px_ob_high",   display = display.data_window)
+plot(obL,                                     "px_ob_low",    display = display.data_window)
+plot(alignmentStr == "ALIGNED" ? 1 : alignmentStr == "DISAGREEMENT" ? -1 : 0,
+                                              "px_alignment", display = display.data_window)
+
+// =============================================================================
+// SECTION E — visuals
+// =============================================================================
+plot(showOR and orReady and not na(orH) ? orH : na, "ORH", color.new(color.teal,   0),
+     2, plot.style_linebr)
+plot(showOR and orReady and not na(orL) ? orL : na, "ORL", color.new(color.teal,   0),
+     2, plot.style_linebr)
+plot(showOB and obReady and not na(obH) ? obH : na, "S5b OBH", color.new(color.gray, 40),
+     1, plot.style_linebr)
+plot(showOB and obReady and not na(obL) ? obL : na, "S5b OBL", color.new(color.gray, 40),
+     1, plot.style_linebr)
+plot(tradeTaken and not daySettled ? stopPx : na, "ORB stop", color.new(color.red, 0),
+     2, plot.style_linebr)
+
+plotshape(showLabels and entryTs == time and orbSide == 1,  "ORB long entry",
+          shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.small)
+plotshape(showLabels and entryTs == time and orbSide == -1, "ORB short entry",
+          shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.small)
+plotshape(showLabels and evtStop,  "ORB stop hit", shape.xcross,
+          orbSide == 1 ? location.belowbar : location.abovebar,
+          color.new(color.red, 0), size = size.tiny)
+plotshape(showLabels and evtClose, "Session close exit", shape.square,
+          orbSide == 1 ? location.abovebar : location.belowbar,
+          color.new(color.gray, 0), size = size.tiny)
+
+if showConviction and (evtS5bLong or evtS5bShort)
+    label.new(bar_index, evtS5bLong ? low : high,
+              (evtS5bLong ? "HIGH CONVICTION LONG" : "HIGH CONVICTION SHORT") +
+              (alignmentStr == "ALIGNED" ? "\nALIGNED with ORB" :
+               alignmentStr == "DISAGREEMENT" ? "\nDISAGREEMENT with ORB" : ""),
+              style = evtS5bLong ? label.style_label_up : label.style_label_down,
+              color = evtS5bLong ? color.new(color.green, 20) : color.new(color.red, 20),
+              textcolor = color.white, size = size.normal)
+
+// --- chart configuration guard ------------------------------------------------
+// The frozen engines run on 5-minute REGULAR-session bars. On any other chart
+// the opening range, the S5b opening balance and the `[1]`/`[2]` bar references
+// silently mean something else, so say so loudly instead of producing numbers
+// that look right. CLAUDE.md: "No silent fallbacks."
+wrongTimeframe = timeframe.period != "5"
+var bool sawNonRthBar = false
+if barstate.isconfirmed and (nyMinute < OR_OPEN_MIN or nyMinute >= 960)
+    sawNonRthBar := true
+configBad = wrongTimeframe or sawNonRthBar
+if configBad and barstate.islast
+    label.new(bar_index, high,
+              "CONFIG ERROR\n" +
+              (wrongTimeframe ? "timeframe is " + timeframe.period + ", must be 5\n" : "") +
+              (sawNonRthBar ? "chart includes non-RTH bars; set the session to\n" +
+                              "regular trading hours (America/New_York)\n" : "") +
+              "Parity is not valid on this chart.",
+              style = label.style_label_down, color = color.new(color.orange, 0),
+              textcolor = color.black, size = size.normal)
+
+var table hud = table.new(position.top_right, 2, 5, border_width = 1)
+if showLabels and barstate.islast
+    table.cell(hud, 0, 0, "ORB",        text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 0, orbDirStr,    text_color = color.white, text_size = size.small)
+    table.cell(hud, 0, 1, "S5b",        text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 1, s5bDirStr + " / " + s5bStateStr,
+                                        text_color = color.white, text_size = size.small)
+    table.cell(hud, 0, 2, "Alignment",  text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 2, alignmentStr, text_color = color.white, text_size = size.small)
+    table.cell(hud, 0, 3, "ORH / ORL",  text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 3, (na(orH) ? "-" : str.tostring(orH)) + " / " +
+                          (na(orL) ? "-" : str.tostring(orL)),
+                                        text_color = color.white, text_size = size.small)
+    table.cell(hud, 0, 4, "Stop",       text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 4, na(stopPx) ? "-" : str.tostring(stopPx),
+                                        text_color = color.white, text_size = size.small)
+
+// =============================================================================
+// SECTION G — DEAD / PARKED (implemented nowhere, listed so review is cheap)
+//   DEAD  : structure-flip exit, FCF dynamic exit, counterattack-succeeds exit,
+//           full-retrace early exit, NO-LATCH +40m exit.
+//   PARKED: add-to-winner / direction-agreement sizing.
+// The only exits in this file are the ORB hard stop and the RTH close.
+// =============================================================================

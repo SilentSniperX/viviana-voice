@@ -1,0 +1,154 @@
+CHATGPT → CLAUDE — ROUND 4: NO-LATCH TIMING TEST
+FROZEN BEFORE ANY ROUND-4 P&L IS EXAMINED
+
+PINNED OBJECTIVE
+Extract what 10 successful traders collectively know, then build ONE executable NQ strategy that preserves their ideas.
+
+WHY ROUND 4 EXISTS
+Part 1 established that completed S5b is an era-stable day-quality classifier.
+Round 3 established that the >100% retrace invalidation adds nothing because the ORB hard stop is hit first.
+Mechanical behavior exits are therefore retired.
+
+The four-state taxonomy produced the first potentially EARLY signal:
+NO-LATCH days are the worst state in every era.
+
+We now test whether "still no S5b latch after a fixed early waiting period" can improve the ORB causally.
+
+IMPORTANT:
+This is NOT a test of the completed S5b flag.
+It is NOT an entry filter.
+It is a single early-state management test.
+
+------------------------------------------------------------
+1. TIMING-ONLY CUTOFF SELECTION — NO P&L USED
+------------------------------------------------------------
+
+Using the exact 4,019 Round-3 ORB trades and the frozen S5b latch definition:
+
+Among ORB days that eventually latch, the latch is already known by:
+
+                +10m   +20m   +30m   +40m   +45m   +60m
+2008–2015       61.3%  72.1%  77.9%  83.1%  85.0%  89.4%
+2016–2023       62.7%  72.3%  78.0%  82.8%  84.2%  87.9%
+2024–Jun 2026   60.0%  72.0%  78.6%  83.1%  85.3%  89.6%
+
+Chosen cutoff: +40 MINUTES after ORB entry.
+
+Reason:
++40m is the earliest tested cutoff at which >80% of eventual latches have already occurred in ALL THREE eras.
+No P&L, win rate, stop behavior, or return data was used to select it.
+
+Additional timing-only fact:
+The percentage of ORB trades still unlatch at +40m is almost identical across eras:
+- 2008–15: 18.21%
+- 2016–23: 18.68%
+- 2024–Jun 2026: 18.20%
+
+That stability is why +40m is frozen.
+
+------------------------------------------------------------
+2. EXACT ROUND-4 RULE
+------------------------------------------------------------
+
+Start with the VERIFIED Samir ORB benchmark unchanged:
+- Same opening range.
+- Same qualified breakout.
+- Same entry.
+- Same original ORB hard stop.
+- One trade/day.
+- Hold to close unless the Round-4 rule below executes first.
+
+S5b latch:
+- Opening balance is the first six 5m bars, 09:30–09:59 ET.
+- Starting with completed 10:00 5m bar, latch occurs on the FIRST 5m CLOSE above OBH or below OBL.
+- This test cares only whether ANY latch has occurred by the cutoff.
+- Do NOT add a same-direction requirement in Round 4; that would mix the NO-LATCH hypothesis with the separate direction-agreement finding.
+
+ROUND-4 ACTION:
+- Observe the ORB position for exactly 40 elapsed minutes after its entry.
+- This equals 8 complete 5-minute bars from the ORB entry timestamp.
+- At the open exactly 40 minutes after entry, ask:
+  "Has an S5b latch occurred at any time up to the just-completed bar?"
+- YES: do nothing. Continue the original Samir hold-to-close benchmark.
+- NO: EXIT the entire ORB position at that 5m open.
+- Original ORB hard stop has priority if it was touched before the +40m decision.
+- No re-entry.
+- No scale-down variant.
+- No second cutoff.
+- No same-direction variant in this round.
+- No S5b completion requirement.
+
+This is one fork, one run.
+
+------------------------------------------------------------
+3. PASS / KILL GATES — FROZEN BEFORE RESULT
+------------------------------------------------------------
+
+Compare Round 4 to the exact plain-Samir benchmark using paired identical entries.
+
+PASS only if ALL are true:
+
+A. PROFIT
+- Overall 2008–Jun 2026 NetR delta versus Samir > 0.
+- Paired NetR delta >= 0 in EACH era:
+  2008–15
+  2016–23
+  2024–Jun 2026
+
+B. QUALITY
+- Overall PF >= Samir.
+- Overall maximum drawdown <= Samir.
+
+C. THE AFFECTED TRADES ACTUALLY BENEFIT
+For trades exited by the +40m NO-LATCH rule:
+- Report Round-4 R versus the counterfactual Samir hold R on those exact trades.
+- The paired delta on these exact trades must be > 0 overall.
+- Report this paired delta separately by era.
+
+D. NO HIDDEN DAMAGE
+- Same ORB entries and original stops.
+- All differences must arise solely from the frozen +40m NO-LATCH exit.
+- Completed 5m information only; exit at next executable 5m open.
+
+OPTIONAL DIAGNOSTIC, NOT A GATE:
+- Paired bootstrap CI for total delta.
+Report it, but do not use it to invent another rule.
+
+KILL if:
+- Total NetR delta <= 0, OR
+- ANY era has negative paired NetR delta, OR
+- PF falls, OR
+- Max DD worsens.
+
+IF KILLED:
+The NO-LATCH early exit is retired.
+Do NOT test +30, +45, +60, partial de-risk, or same-direction rescue variants in this round.
+The working architecture becomes:
+ORB = early positioning.
+S5b completed sequence = later conviction/day classification.
+Hold-to-close = default behavior once positioned.
+
+IF PASSED:
+Round 4 becomes the first proven causal timing improvement.
+Only then may we separately preregister a direction-agreement or add-to-success test.
+
+------------------------------------------------------------
+4. RETURN TO CHATGPT
+------------------------------------------------------------
+
+Return:
+1. Overall + three-era benchmark/fork table:
+   trades, NetR, PF, max DD.
+2. Paired NetR delta vs Samir overall + each era.
+3. Number and percentage of trades exited by +40m NO-LATCH.
+4. On those exact affected trades:
+   fork R, Samir counterfactual hold R, paired delta, by era.
+5. How many positions had already hit the ORB stop before +40m.
+6. Exit-time distribution.
+7. Full trade CSV with:
+   date, side, entry_ts, entry, stop, cutoff_ts,
+   latch_by_cutoff, exit_reason, benchmark_R, round4_R.
+
+ONE RUN.
+NO PARAMETER SWEEP.
+NO REINTERPRETATION AFTER RESULT.

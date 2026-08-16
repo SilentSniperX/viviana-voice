@@ -1,0 +1,63 @@
+CLAUDE CODE — START HERE
+
+You are opening a complete engineering handoff for the NQ ORB + S5b system.
+
+FIRST:
+1. Read `CLAUDE.md`.
+2. Read `START_HERE.md`.
+3. Read `spec/STRATEGY_SPEC_FROZEN.md`.
+4. Read `spec/PARITY_ACCEPTANCE_GATES.md`.
+5. Read the latest Claude Round-4 report and trade log in `research/latest_round4/`.
+6. Inspect the Python/reference artifacts in `research/master_handoff/`.
+
+DO NOT START BY WRITING BROKER CODE.
+
+PHASE 1 — REFERENCE/PARITY
+- Reconstruct the exact verified Samir ORB benchmark.
+- Produce a canonical reference trade table from the supplied research logs.
+- Implement the ORB in Pine Script v6.
+- Compare TradingView/Pine output to the canonical table wherever data coverage permits.
+- Categorize every mismatch; do not alter the strategy to make a mismatch disappear.
+- Implement S5b as a state/classifier, not as an earlier-entry filter.
+- Spot-check S5b latch/pullback/failure/reassertion timestamps against supplied logs.
+
+PHASE 2 — ALERTS / PAPER PIPELINE
+Only after parity is acceptable:
+- Add deterministic alerts:
+  ORB_LONG_ENTRY
+  ORB_SHORT_ENTRY
+  S5B_LONG_CONFIRMED
+  S5B_SHORT_CONFIRMED
+  ORB_STOP
+  SESSION_CLOSE_EXIT
+- Build a local paper webhook receiver.
+- Validate JSON schema, idempotency, timestamps, and duplicate protection.
+- Maintain an internal paper position ledger.
+- DO NOT connect live capital.
+
+PHASE 3 — TRADINGVIEW WORKFLOW
+- Document exactly how to install the Pine script, set the chart/session/timeframe,
+  create alerts, configure webhook URL, and validate incoming events.
+- If you have a connected TradingView capability through MCP or another approved tool,
+  use it for deployment/testing only after the Pine source is committed locally.
+- Never rely on an LLM visual judgment for order decisions. Pine/state-machine rules are deterministic.
+
+PHASE 4 — PAPER PARITY AUDIT
+- Compare:
+  Python/reference signal -> TradingView alert -> paper executor event.
+- Produce a daily reconciliation report.
+- The system is not ready for live-money discussion until this chain is reliable.
+
+STOP CONDITIONS
+- Any source conflict.
+- Trade-list parity failure that cannot be explained by TradingView-vs-FirstRate feed differences.
+- Repainting/lookahead behavior.
+- Duplicate execution risk.
+- Missing stop event / position-state mismatch.
+- Any urge to "improve" the strategy. This task is implementation, not research.
+
+When you begin, return:
+A) repo audit,
+B) implementation plan,
+C) any missing dependency/connection that truly blocks Phase 1,
+then start Phase 1 immediately.

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NQ ORB S5b Alert",
+  "type": "object",
+  "required": [
+    "strategy_version",
+    "signal_id",
+    "event",
+    "symbol",
+    "event_time",
+    "direction",
+    "orb_direction",
+    "s5b_state",
+    "alignment"
+  ],
+  "properties": {
+    "strategy_version": {
+      "type": "string",
+      "const": "nq_orb_s5b_v1"
+    },
+    "signal_id": {
+      "type": "string"
+    },
+    "event": {
+      "enum": [
+        "ORB_LONG_ENTRY",
+        "ORB_SHORT_ENTRY",
+        "S5B_LONG_CONFIRMED",
+        "S5B_SHORT_CONFIRMED",
+        "ORB_STOP",
+        "SESSION_CLOSE_EXIT"
+      ]
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "event_time": {
+      "type": "string"
+    },
+    "direction": {
+      "enum": [
+        "LONG",
+        "SHORT",
+        "NONE"
+      ]
+    },
+    "orb_direction": {
+      "enum": [
+        "LONG",
+        "SHORT",
+        "NONE"
+      ]
+    },
+    "s5b_state": {
+      "enum": [
+        "WAITING_FOR_LATCH",
+        "LATCHED",
+        "PULLBACK_ACTIVE",
+        "COUNTERATTACK_FAILURE",
+        "CONFIRMED",
+        "INVALIDATED"
+      ]
+    },
+    "s5b_direction": {
+      "enum": [
+        "LONG",
+        "SHORT",
+        "NONE"
+      ]
+    },
+    "alignment": {
+      "enum": [
+        "ALIGNED",
+        "DISAGREEMENT",
+        "UNRESOLVED"
+      ]
+    },
+    "entry": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "stop": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "or_high": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "or_low": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "s5b_ob_high": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "s5b_ob_low": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,8 @@
+Strategy,Window,Trades,Net R,Profit Factor,Max DD (R),Verdict
+Samir ORB benchmark,2016–2026,2295,122.82,1.1,-25.65,Raw-profit leader
+"Literal failed-counterattack, 5m entry",2016–2026,1108,-27.27,0.95,-41.83,Fails
+"Literal failed-counterattack, 1m entry + hold",2016–2026,1681,53.16,1.09,-156.29,"Positive, but unstable"
+ORB + collective counterattack management,2016–2026,2295,96.92,1.16,-21.22,Best synthesis / smoother
+Samir ORB benchmark,2024–Jun 2026,566,43.87,1.12,-16.46,Raw-profit leader
+"Literal failed-counterattack, 1m entry + hold",2024–Jun 2026,415,50.7,1.12,-30.98,"Higher R, much worse DD"
+ORB + collective counterattack management,2024–Jun 2026,566,34.46,1.16,-9.98,"Lower profit, much smoother"

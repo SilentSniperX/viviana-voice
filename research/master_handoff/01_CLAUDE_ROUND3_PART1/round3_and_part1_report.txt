@@ -1,0 +1,129 @@
+================================================================
+PINNED OBJECTIVE
+Extract what 10 successful traders collectively know, then build
+ONE executable NQ strategy that preserves their ideas.
+
+CLAUDE → CHATGPT: ROUND-3 RESULT (frozen gates) + PART-1 AUDIT
+All numbers computed this session on the raw FirstRate zips;
+engines and trade CSVs included in this package.
+================================================================
+
+ROUND 3 — VERDICT: KILL, AND THE REASON IS THE FINDING
+
+Same entries as the benchmark by construction (one engine, one
+pass): n=4,019 (your 2008–26 log: 4,022 / +66.87R — my +66.85R,
+effectively exact parity again; 3-trade delta ~ session filters).
+
+              n      BENCH netR/PF/DD          FORK netR/PF/DD          pairedΔ
+OVERALL     4,019   +66.85 / 1.033 / −116.4   +66.85 / 1.033 / −116.4    0.00
+2008–15     1,724   −55.96 / 0.940 / −97.3    −55.96 / 0.940 / −97.3     0.00
+2016–23     1,729   +78.95 / 1.093 / −25.7    +78.95 / 1.093 / −25.7     0.00
+2024–26       566   +43.87 / 1.167 / −16.5    +43.87 / 1.167 / −16.5     0.00
+
+Branches: A=666, B=374, C=2,979.
+B invalidation exits actually executed: ZERO. Zero of 374.
+Counterfactual on B trades: fork −389.24R vs hold −389.24R
+(2008–15: −166.2 both | 2016–23: −172.6 both | 2024–26: −50.4 both).
+
+Why zero: on every single B day the ORB hard stop was touched
+BEFORE the >100%-retrace invalidation could resolve on a
+completed 5m bar. Geometrically, a same-direction S5b leg that
+fully retraces has to travel back through the OR — the ORB stop
+region — first. Frozen v1.0's "full loss of directional control"
+is ALREADY the ORB stop, expressed at ORB scale. The invalidation
+exit isn't wrong; it's redundant.
+
+Per the frozen protocol: the invalidation exit is KILLED (NetR
+not > Samir), no rescue variants, and the conclusion you
+pre-wrote stands — mechanical early exits are retired;
+hold-to-close is the benchmark behavior once the trade is valid.
+The B-days lose −1.04R average and the existing stop already
+handles all of them.
+
+================================================================
+PART 1 — S5b CLASSIFIER AUDIT (your five questions)
+
+1) GENUINE DAY-CLASSIFICATION INFORMATION? YES.
+Matched placebo — same number of flagged days drawn matched on
+ORB side + calendar month, 2,000 draws per era:
+  2008–15: real +156.7R vs placebo mean +7.6 (sd 21.9) → 100th pct
+  2016–23: real +141.5R vs placebo mean +28.7 (sd 18.5) → 100th pct
+  2024–26: real +45.1R vs placebo mean +12.4 (sd 9.6) → 99.9th pct
+p ≤ 0.001 in every era, including the era where ORB itself loses.
+
+2) SURVIVES THE VOLUME-SEARCH AXIS? YES — the knob is not
+load-bearing for the classifier. ORB split by flag, per
+multiplier, per era (flagged-day PF):
+  1.0×:  1.77 / 1.98 / 2.02   (n=606/461/142)
+  1.2×:  1.92 / 2.54 / 2.61   (n=413/269/79)
+  1.4×:  1.97 / 2.76 / 4.95   (n=263/153/33)
+Positive and era-stable at EVERY threshold; raising it trades
+breadth for sharpness. Non-flagged days remain negative-to-flat
+at every threshold. No new threshold selected (per your rule).
+Adjacent cells — no cliffs, it's a plateau:
+  band 0.20–0.80: PF 1.87 / 2.64 / 2.69
+  band 0.30–0.70: PF 1.64 / 2.57 / 2.40
+  tolerance 0pt:  PF 1.97 / 2.74 / 2.48
+
+3) MODERN VOLUME RELATIONSHIP REGIME-SPECIFIC? For the STANDALONE
+S5b trade — yes, your historical gradient stands. For the
+CLASSIFIER — no: the split holds at 1.0× in all eras, so the
+day-quality information does not depend on the modern volume
+regime.
+
+4) CONCENTRATION — trend-capture, not luck. Flagged-day ORB R:
+  2008–15: top-5 = 17% of total; top-10 removed → +108.9R remains
+  2016–23: top-5 = 22%; top-10 removed → +88.6R remains
+  2024–26: top-5 = 45%, top-10 = 75% (n=79) — thinner, but even
+  top-10 removed leaves +11.1R positive.
+Historically broad-based across 1,031 flagged days. The 97%-in-
+top-5 concentration you found applies to STANDALONE S5b's own
++15R, which remains a real caveat for trading S5b alone — not to
+the classifier.
+
+5) TRADINGVIEW-SAFE REPRESENTATION: the full state machine is
+causal on completed 5m bars (latch → pullback band → failure →
+reassertion → invalidation), exactly as your Module-B spec. One
+addition from this audit belongs on the chart — see below.
+
+NEW FINDING — THE FOUR-STATE DAY TAXONOMY (near-miss control):
+ORB performance by how far the S5b sequence got that day
+(PF per era 2008–15 / 2016–23 / 2024–26):
+  COMPLETED (full sequence):        1.92 / 2.54 / 2.61
+  LATCH-ONLY (no pullback to band): 1.70 / 2.76 / 1.97  ← good!
+  NEAR-MISS (band reached, no
+    completed event):               0.70 / 0.90 / 1.04  ← bad
+  NO LATCH (no 5m close ever
+    beyond the 30-min OB):          0.26 / 0.29 / 0.22  ← worst
+Completion is the payload — 80% of the sequence carries none of
+it. And runaway days that never pull back are nearly as good as
+completed days: the two winning states are "it never let anyone
+in" and "the counterattack came and failed." The two losing
+states are "the pullback came and nothing resolved" and "the
+break never even cleared the opening balance."
+
+ROUND-4 PROPOSAL (preregister before any P&L is looked at):
+The NO-LATCH state is knowable EARLY — within minutes-to-tens-of-
+minutes of the ORB entry — unlike the completed flag (median
++35 min). Single hypothesis, one test, your gates: does acting on
+the latch state (exit or de-risk if no 5m close beyond the 30-min
+OB within N bars of ORB entry) beat holding, paired per era?
+Correct order: (1) measure the latch-timing distribution first
+and fix N from timing alone, (2) you freeze pass/kill gates,
+(3) one run. Given Round 3's lesson (the stop already owns the
+worst days), my prior is honestly ~50/50 — the no-latch days may
+also be the stop's days. That's exactly why it's one preregistered
+test and not a tweak.
+
+PARITY (your item 1): claude_s5b_hist_2008_2023.csv is in this
+package — 763 trades with full 2023, and exactly 749 through
+2023-07-12, which was my original run's data boundary (pre-2023
+zip ends there). First diff candidate: your 741 vs my 749 may be
+2023-coverage or session-filter differences — state your 2023
+window and we line-diff from these files.
+
+FILES: round3_fork_trades.csv (4,019 rows: branch, exit reason,
+bench_R, fork_R), claude_s5b_hist_2008_2023.csv (763 rows),
+s5b_day_flags_allmult.csv (4,768 days × 1.0/1.2/1.4× flags +
+latch/band/invalid states). Engines: round3.py.
+================================================================
