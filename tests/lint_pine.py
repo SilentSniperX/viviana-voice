@@ -47,7 +47,7 @@ def fail(rule: str, msg: str) -> None:
     FINDINGS.append(f"{rule}: {msg}")
 
 
-def check(path: str) -> None:
+def check(path: str, enforce_build: bool = True) -> None:
     src = open(path).read()
     lines = src.split("\n")
 
@@ -182,7 +182,12 @@ def check(path: str) -> None:
                             f"on line {def_line}")
                 break
 
-    # L12 — the build stamp must track the file, or it is decoration
+    # L12 — the build stamp must track the file, or it is decoration.
+    # Only the STRATEGY file needs it: it is what the receiver validates against.
+    # The manual-alert indicator has no receiver and no build to pin.
+    if not enforce_build:
+        print(f"checked {path} ({len(lines)} lines, {n} plots)")
+        return
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from stamp_build_id import current, expected          # noqa: E402
     want, have = expected(src), current(src)
@@ -218,11 +223,16 @@ def strip_literals(line: str) -> str:
     return "".join(out)
 
 
+ALERTS = os.path.join(REPO, "pine", "nq_orb_s5b_alerts.pine")
+
+
 def main() -> int:
     if not os.path.exists(PINE):
         print(f"missing {PINE}", file=sys.stderr)
         return 2
     check(PINE)
+    if os.path.exists(ALERTS):
+        check(ALERTS, enforce_build=False)
     if FINDINGS:
         print(f"\n{len(FINDINGS)} finding(s):")
         for f in FINDINGS:
