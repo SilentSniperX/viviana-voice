@@ -83,8 +83,44 @@ def floor_bar(t: datetime) -> datetime:
 
 
 def read_rows(path: str) -> list[dict]:
-    with open(path, newline="") as fh:
+    # Real TradingView exports carry a UTF-8 BOM; without utf-8-sig the first
+    # column name comes back as "\ufeffTrade number" and every lookup fails.
+    with open(path, newline="", encoding="utf-8-sig") as fh:
         return list(csv.DictReader(fh))
+
+
+def detect_tz_offset(entries: list[datetime]) -> int:
+    """Infer the chart's UTC offset relative to New York, in hours.
+
+    TradingView exports timestamps in the CHART's timezone, not the exchange's.
+    The frozen spec pins every ORB entry to the 09:50-10:35 New York window, so
+    the offset is whichever shift puts the most entries inside it. Comparing raw
+    export timestamps against the reference without this correction makes every
+    trade look like an entry-time mismatch.
+    """
+    best, best_hits = 0, -1
+    for off in range(-12, 15):
+        hits = sum(1 for e in entries
+                   if "09:50" <= (e + timedelta(hours=off)).strftime("%H:%M") <= "10:35")
+        if hits > best_hits:
+            best, best_hits = off, hits
+    return best
+
+
+def detect_multiplier(rows: list[dict]) -> float | None:
+    """Read $/point straight out of the export: NQ is 20, MNQ is 2.
+
+    Mixing them silently turns a points comparison into a 10x error.
+    """
+    for r in rows:
+        try:
+            v = float(r[find_col(r, "size (value)", "size(value)")])
+            p = float(r[find_col(r, "price usd", "price")])
+            if p:
+                return round(v / p, 2)
+        except (SystemExit, ValueError, KeyError, ZeroDivisionError):
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +149,15 @@ def parse_tv_export(path: str) -> list[dict]:
     c_dt = find_col(rows[0], "date/time", "date")
     c_px = find_col(rows[0], "price usd", "price")
 
+    mult = detect_multiplier(rows)
+    if mult is not None:
+        sym = ("NQ e-mini" if abs(mult - 20) < 0.5 else
+               "MNQ micro" if abs(mult - 2) < 0.5 else "UNRECOGNISED")
+        print(f"contract multiplier detected: ${mult:g}/point ({sym})")
+        if abs(mult - 20) >= 0.5:
+            print(f"  WARNING: the reference is NQ at $20/point. Dollar figures are "
+                  f"NOT comparable; divide by {mult:g} to compare points.")
+
     grouped: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         grouped[str(r[c_num]).strip()].append(r)
@@ -135,6 +180,15 @@ def parse_tv_export(path: str) -> list[dict]:
             t["exit"] = float(x[c_px])
         trades.append(t)
     trades.sort(key=lambda x: x["entry_ts"])
+    off = detect_tz_offset([t["entry_ts"] for t in trades])
+    if off:
+        print(f"chart timezone detected: New York {off:+d}h — shifting all export "
+              f"timestamps to New York before comparison")
+        for t in trades:
+            t["entry_ts"] += timedelta(hours=off)
+            if t["exit_ts"] is not None:
+                t["exit_ts"] += timedelta(hours=off)
+            t["date"] = str(t["entry_ts"].date())
     return trades
 
 
@@ -198,14 +252,25 @@ def classify(diffs: set, ref: dict, tv: dict) -> tuple[int, str]:
 def compare(ref_rows: list[dict], tv_trades: list[dict], price_tol: float,
             offset_ok: bool) -> tuple[list[dict], Counter, dict]:
     ref_by_date = {r["date"]: r for r in ref_rows}
+    # Clamp to the span the REFERENCE actually covers as well. An export that
+    # runs past the end of the reference data would otherwise report every
+    # unverifiable trade as an unknown mismatch, which is noise, not a finding.
+    ref_lo = min(ref_by_date); ref_hi = max(ref_by_date)
+    lo = max(tv_trades[0]["date"], ref_lo)
+    hi = min(tv_trades[-1]["date"], ref_hi)
+    if hi < tv_trades[-1]["date"]:
+        n_beyond = sum(1 for t in tv_trades if t["date"] > hi)
+        print(f"NOTE: {n_beyond} export trades fall after {hi}, the end of the "
+              f"reference data — excluded as unverifiable, not counted as mismatches")
+    tv_trades = [t for t in tv_trades if lo <= t["date"] <= hi]
+    window = {d: r for d, r in ref_by_date.items() if lo <= d <= hi}
+
     tv_by_date: dict[str, list[dict]] = defaultdict(list)
     for t in tv_trades:
         tv_by_date[t["date"]].append(t)
 
     if not tv_trades:
         raise SystemExit("no trades parsed from the TradingView export")
-    lo, hi = tv_trades[0]["date"], tv_trades[-1]["date"]
-    window = {d: r for d, r in ref_by_date.items() if lo <= d <= hi}
 
     findings: list[dict] = []
     counts: Counter = Counter()

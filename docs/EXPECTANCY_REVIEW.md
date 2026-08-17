@@ -1,5 +1,24 @@
 # EXPECTANCY REVIEW — the 65-trade TradingView run
 
+> **UPDATED after the actual trade lists arrived (NQ1! and MNQ1!). Two claims in
+> the first version of this document were WRONG and are corrected below.**
+>
+> 1. **I compared MNQ dollars against NQ dollars.** The first export was
+>    `MNQ1!` — the micro, **$2/point** — and I compared its −$6,014 against the
+>    reference's −$11,730 at **$20/point**. In the unit that matters that is
+>    −3,007 points versus −587. The claim "the reference lost nearly twice as
+>    much" was an apples-to-oranges error. The export states the multiplier in
+>    its own `Size (value)` column and I did not check it.
+> 2. **My late-exit hypothesis was wrong about the direction of the effect.**
+>    Exits were indeed firing an hour late — but simulating it over 664 sessions
+>    shows that *helped* by +974 points. It is a real parity break, not the
+>    cause of the loss.
+>
+> **What the trade lists actually establish: parity PASSES.** On the e-mini,
+> 37/37 entries match the reference exactly — same day, same direction, same
+> entry bar — with zero divergences, and every exit reason matches. See
+> "Parity result" below.
+
 Written in response to the handoff concluding *"the strategy appears to have
 negative expectancy"* on the strength of a 65-trade TradingView backtest.
 
@@ -9,25 +28,48 @@ way.** Reproduce everything here with `python3 tests/expectancy_check.py`
 
 ---
 
-## The one number that settles it
+## Parity result — the trade lists settle it
 
-The TradingView run: 65 trades, **−$6,014**, PF 0.57, 35.4% wins.
+`NQ1!` export, 65 trades, 2026-05-04 to 2026-08-14. The reference data ends
+2026-06-30, so **37 sessions are verifiable**:
 
-The verified reference engine — the research output itself, the thing
-TradingView is being compared against — over its own most recent 65 trades
-(2026-03-18 to 2026-06-30):
+| check | result |
+|---|---|
+| entry: same day, direction and entry bar | **37 / 37 exact** |
+| exit reason (stop vs close) | **37 / 37 match** |
+| canonical trades missing from the export | **0** |
+| export trades absent from the canonical list | **0** |
+| session-close exits on the correct bar | **0 / 19** — all an hour late |
 
-| | net | PF | win% | stops |
-|---|---|---|---|---|
-| TradingView, 65 trades | **−$6,014** | 0.57 | 35.4% | 53.8% |
-| Reference, last 65 trades | **−$11,730** | 0.90 | 41.5% | 46.2% |
+The single defect is the close bar: exits fired at 16:55 NY, the end of the
+Globex day, instead of the reference's 15:55 bar. `session.islastbar_regular`
+was resolving to the end of the electronic session. Fixed in v1.4, which makes
+the clock authoritative.
 
-**The reference lost nearly twice as much over the comparable window.** Whatever
-the TradingView run is showing, it is not a failure to reproduce the reference's
-recent behaviour — the reference's recent behaviour is *also* a loss.
+The `MNQ1!` export shows 4 entry and 2 direction differences over the same
+window. That is the micro contract's own tick data producing marginally
+different opening-range levels — the two TradingView exports agree with each
+other on 61 of 65 trades. **The e-mini is the instrument to grade against.**
 
-Killing the strategy on this sample means killing it on a window where the
-known-good, decade-validated engine also loses money.
+## Where the loss actually is
+
+Points, not dollars (the two exports use different multipliers):
+
+| window | TradingView NQ1! | reference |
+|---|---|---|
+| 37 verifiable sessions (2026-05-04..06-30) | −1,167 pts | **−1,409 pts** |
+| 28 sessions beyond the reference data | −866 pts | not verifiable |
+| total, 65 trades | **−2,033 pts (−$40,660 on NQ)** | — |
+
+Over the verifiable window the **reference loses more than TradingView does**
+(−1,409 vs −1,167 points), and the 242-point gap is almost exactly the +215
+points the late-exit simulation predicts for that window. The implementation is
+not what lost the money.
+
+The drawdown is real and it belongs to the strategy: reference net points by
+month in 2026 run +71, +965, −138, +289, −115, **−1,332 in June**. A −1,409-point
+stretch over 37 trades sits at the **2.7th percentile** of the bootstrap — a bad
+run, inside the distribution, not outside it.
 
 ## Why 65 trades cannot answer the question
 
