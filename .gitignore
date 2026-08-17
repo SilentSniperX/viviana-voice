@@ -11,3 +11,5 @@ node_modules/
 # tests/parity_report.md is the tracked, hand-written status document.
 tests/parity_report_*.md
 tests/_parity_run/
+
+executor/_state/
