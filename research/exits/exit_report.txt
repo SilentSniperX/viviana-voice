@@ -1,0 +1,101 @@
+================================================================================
+EXIT DIAGNOSIS — frozen entries and stops, exits varied
+================================================================================
+
+PREMISE: 'average winning R shrank 33%'
+--------------------------------------------------------------------------------
+  era              n    win%  avg win R   p90 win   max win  top-10% share
+  2016-2020     1063   41.6%      1.249      2.51      6.77          29.6%
+  2021-2023      666   47.4%      1.189      2.37      5.54          27.4%
+  2024-2026      566   45.1%      1.200      2.36      8.89          29.6%
+
+  Average winning R: 1.249 -> 1.189 -> 1.200. That is -4%, not -33%.
+  The winning TAIL is unchanged (p90 flat, largest winner is the
+  MOST recent era's 8.89R, top-decile share flat at ~29%).
+  Year-to-year the figure swings +-25% and REVERSES: 1.502 (2018),
+  0.969 (2021), 1.416 (2024), 1.048 (2025). A -33% reading exists
+  only between cherry-picked years. First-250 vs last-250 is -16%.
+
+  path data: 664 trades reconstructed from 1-minute bars (2023-01-01 onward only)
+  baseline vs frozen reference netR: median diff 0.0000R, 100% within 0.05R
+
+--------------------------------------------------------------------------------
+DIAGNOSTIC — is opportunity smaller, or is capture worse?
+--------------------------------------------------------------------------------
+group             n  med MFE  mean MFE    +1R   +1.5R    +2R    +3R   t-MFE    dur
+2023 (partial)   98     0.80      1.13  43.9%   27.6%  16.3%   5.1%    126m   345m
+2024            233     0.92      1.23  45.1%   30.0%  19.7%   9.4%     76m   335m
+2025            219     0.94      1.04  46.6%   25.1%  11.4%   3.2%     68m   335m
+2026H1          114     0.72      0.99  38.6%   25.4%  12.3%   5.3%     72m   340m
+2024-2026       566     0.88      1.11  44.3%   27.2%  15.0%   6.2%     74m   335m
+
+group           realised     MFE  giveback  capture   WINNERS ONLY
+2023 (partial)     1.266   1.742     0.476    72.7%
+2024               1.416   2.037     0.621    69.5%
+2025               1.048   1.625     0.577    64.5%
+2026H1             1.079   1.559     0.481    69.2%
+2024-2026          1.200   1.774     0.574    67.6%
+
+group           realised     MFE  giveback  capture   ALL TRADES
+2023 (partial)     0.111   1.128     1.017     9.8%
+2024               0.120   1.235     1.115     9.7%
+2025               0.035   1.040     1.005     3.4%
+2026H1             0.071   0.988     0.917     7.2%
+2024-2026          0.078   1.110     1.032     7.0%
+
+  CONDITIONAL CONTINUATION — does reaching a level predict the next?
+    2024-2026: reached +1.0R -> P(reach +1.5R) = 61.4%  (n=251)
+    2024-2026: reached +1.5R -> P(reach +2.0R) = 55.2%  (n=154)
+    2024-2026: reached +2.0R -> P(reach +3.0R) = 41.2%  (n=85)
+    of trades reaching +1R, 15.5% still ended at the STOP; mean realised +0.948R
+
+--------------------------------------------------------------------------------
+PREREGISTERED EXIT FAMILIES — identical entries and stops
+--------------------------------------------------------------------------------
+
+  2023 (partial)  (n=98)
+  family                     total R    exp R     PF   maxDD  avg win    win%
+  A  15:55 baseline             10.9   +0.111   1.24     9.5    1.266   45.9%
+  B1 target 1.0R                 5.4   +0.056   1.13     8.6    0.879   54.1%
+  B2 target 1.5R                 9.7   +0.099   1.22     9.5    1.116   49.0%
+  B3 target 2.0R                12.4   +0.127   1.28     9.5    1.202   48.0%
+  C  half 1R + hold              8.1   +0.083   1.20     9.0    1.008   50.0%
+  D  half 1R + breakeven         3.0   +0.030   1.07    10.1    0.833   54.1%
+
+  2024  (n=233)
+  family                     total R    exp R     PF   maxDD  avg win    win%
+  A  15:55 baseline             28.0   +0.120   1.24    15.6    1.416   43.3%
+  B1 target 1.0R                21.7   +0.093   1.24     5.2    0.868   56.2%
+  B2 target 1.5R                25.5   +0.109   1.25     9.4    1.134   48.9%
+  B3 target 2.0R                17.4   +0.075   1.15    15.9    1.255   44.6%
+  C  half 1R + hold             24.8   +0.107   1.27     9.0    1.064   47.2%
+  D  half 1R + breakeven        32.3   +0.139   1.35     7.0    0.949   56.2%
+
+  2025  (n=219)
+  family                     total R    exp R     PF   maxDD  avg win    win%
+  A  15:55 baseline              7.8   +0.035   1.08    16.5    1.048   46.1%
+  B1 target 1.0R                25.7   +0.117   1.31     5.6    0.882   55.7%
+  B2 target 1.5R                21.9   +0.100   1.24    11.5    1.060   49.3%
+  B3 target 2.0R                12.3   +0.056   1.12    14.3    1.081   46.6%
+  C  half 1R + hold             16.7   +0.076   1.20     9.1    0.914   49.3%
+  D  half 1R + breakeven        20.2   +0.092   1.25     7.1    0.837   55.7%
+
+  2026H1  (n=114)
+  family                     total R    exp R     PF   maxDD  avg win    win%
+  A  15:55 baseline              8.1   +0.071   1.16     7.6    1.079   46.5%
+  B1 target 1.0R                 7.6   +0.066   1.17     9.5    0.823   54.4%
+  B2 target 1.5R                13.1   +0.115   1.28     9.1    1.025   50.9%
+  B3 target 2.0R                 7.3   +0.064   1.15     9.1    1.001   48.2%
+  C  half 1R + hold              7.8   +0.069   1.18     7.2    0.884   50.9%
+  D  half 1R + breakeven         7.2   +0.063   1.17     7.0    0.816   54.4%
+
+  2024-2026  (n=566)
+  family                     total R    exp R     PF   maxDD  avg win    win%
+  A  15:55 baseline             43.9   +0.078   1.17    16.5    1.200   45.1%
+  B1 target 1.0R                54.9   +0.097   1.25     9.5    0.864   55.7%
+  B2 target 1.5R                60.5   +0.107   1.25    11.5    1.083   49.5%
+  B3 target 2.0R                37.0   +0.065   1.14    15.9    1.134   46.1%
+  C  half 1R + hold             49.4   +0.087   1.23     9.1    0.968   48.8%
+  D  half 1R + breakeven        59.6   +0.105   1.27     7.1    0.879   55.7%
+
+================================================================================
