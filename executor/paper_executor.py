@@ -81,6 +81,16 @@ class Rejected(Exception):
     """A payload that must not reach the ledger. The reason is always logged."""
 
 
+class NotDurable(Exception):
+    """The event could not be committed to the append-only log.
+
+    Distinct from Rejected: the payload was VALID and would have been accepted.
+    In-memory state is rolled back and the caller answers 503, because the
+    alternative — a running process holding a position the durable log has no
+    record of — survives until the next restart and then silently vanishes.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Broker interface — paper only
 # ---------------------------------------------------------------------------
@@ -283,6 +293,7 @@ class Ledger:
         self.closed: list[dict] = []
         self.rejections: list[dict] = []
         self.skipped = 0          # unusable log lines seen during recovery
+        self.ledger_log_failures = 0   # durable event written, summary line not
         self.sessions_traded: set[str] = set()   # frozen spec B: one trade/day
         self.resting_stop: dict | None = None
 
@@ -323,6 +334,14 @@ class Ledger:
         sid = payload["signal_id"]
         if sid in self.seen:
             raise Rejected(f"duplicate signal_id {sid}")
+
+        # Everything below MUTATES. If the append-only log cannot then be
+        # written — a full disk is the realistic case — this snapshot is what
+        # keeps memory and disk from diverging. Without it the process goes on
+        # holding a position that no durable record contains, and a restart
+        # silently flattens it.
+        undo = (self.position, list(self.closed), set(self.sessions_traded),
+                set(self.seen), self.resting_stop)
 
         event = payload["event"]
         result: dict
@@ -403,8 +422,25 @@ class Ledger:
 
         self.seen.add(sid)
         if persist:
-            append(EVENT_LOG, {"received": utcnow(), "payload": payload})
-            append(LEDGER_LOG, {"at": utcnow(), "signal_id": sid, **result})
+            try:
+                # The EVENT log is the one that must survive: `rebuild` replays
+                # it and nothing else. It is written first, so a failure here
+                # leaves no trace to roll back from.
+                append(EVENT_LOG, {"received": utcnow(), "payload": payload})
+            except OSError as exc:
+                (self.position, self.closed, self.sessions_traded,
+                 self.seen, self.resting_stop) = undo
+                raise NotDurable(f"could not commit {sid} to the event log: "
+                                 f"{exc}") from exc
+            try:
+                append(LEDGER_LOG, {"at": utcnow(), "signal_id": sid, **result})
+            except OSError as exc:
+                # The event log already has it, so a rebuild recovers this
+                # state correctly. Rolling back here would be the wrong move —
+                # it would contradict the durable record. Surface it instead.
+                self.ledger_log_failures += 1
+                print(f"WARNING: ledger log write failed for {sid}: {exc}",
+                      file=sys.stderr)
         return result
 
     def snapshot(self) -> dict:
@@ -413,6 +449,8 @@ class Ledger:
                 "net_dollars": round(sum(c.get("dollars", 0) for c in self.closed), 2),
                 "signals_seen": len(self.seen), "fills_recorded": len(load_fills()),
                 "unusable_log_lines": self.skipped,
+                "ledger_log_failures": self.ledger_log_failures,
+                "state_dir_writable": state_dir_writable(),
                 "sessions_traded": len(self.sessions_traded),
                 "protective_stop": self.resting_stop,
                 "kill_switch": kill_engaged(),
@@ -436,6 +474,23 @@ def make_broker(name: str) -> BrokerAdapter:
             "The adapter exists and is tested; wiring it is a live-capital "
             "decision, not a runtime flag.")
     raise SystemExit(f"unknown broker {name!r} (paper|tradovate)")
+
+
+def state_dir_writable() -> bool:
+    """Can the append-only log actually be written right now?
+
+    Exposed on the status endpoint so a full or read-only disk is visible
+    BEFORE a session rather than at the moment an entry needs committing.
+    """
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        probe = os.path.join(STATE_DIR, ".writable")
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
 
 
 def kill_engaged() -> bool:
@@ -484,6 +539,12 @@ def make_handler(ledger: Ledger):
                     result = ledger.apply(payload, enforce_freshness=True)
             except Rejected as exc:
                 return self.reject(str(exc), raw)
+            except NotDurable as exc:
+                # 503, not 400: the payload was valid and TradingView should be
+                # free to retry. Nothing is written here — the reject log lives
+                # on the same disk that just failed.
+                print(f"NOT DURABLE: {exc}", file=sys.stderr)
+                return self.respond(503, {"ok": False, "not_durable": str(exc)})
             self.respond(200, {"ok": True, **result})
 
         def do_GET(self):
@@ -695,6 +756,32 @@ def selftest() -> int:
               json.dumps({k: led5.closed[-1][k]
                           for k in ("exit", "gross_points", "points")}))
         KILL_FILE = keep_kill
+
+    # A full disk must not leave the process holding a position the durable log
+    # has no record of: that survives until the next restart and then silently
+    # vanishes. Red-team finding 7.
+    import builtins
+    led6 = Ledger()
+    real_open = builtins.open
+    builtins.open = lambda *a, **k: (
+        (_ for _ in ()).throw(OSError(28, "No space left on device"))
+        if a and str(a[0]).endswith("events.jsonl") else real_open(*a, **k))
+    try:
+        led6.apply(entry("d1"), persist=True)
+        ok = False
+    except NotDurable as exc:
+        ok = "could not commit" in str(exc)
+    except OSError:
+        ok = False
+    finally:
+        builtins.open = real_open
+    check("a failed durable write raises NotDurable, not OSError", ok)
+    check("and in-memory state is rolled back, not left ahead of the log",
+          led6.position is None and not led6.sessions_traded and not led6.seen,
+          f"position={led6.position} sessions={led6.sessions_traded}")
+    led6.apply(entry("d1"), persist=False)
+    check("the same alert can be retried once the disk recovers",
+          led6.position is not None)
 
     with tempfile.TemporaryDirectory() as tmp:
         bad = os.path.join(tmp, "corrupt.jsonl")

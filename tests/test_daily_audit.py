@@ -315,6 +315,80 @@ def main() -> int:
           not rep.clean and any("reference did" in n for n in names(rep)),
           ", ".join(names(rep)))
 
+    print("\nred-team partial-silence paths (ChatGPT brief, 1-8)")
+    # Each of these is a way for ONE stream to go quiet while the others look
+    # healthy. The heartbeat closed total silence; these are the partial cases.
+
+    reset()   # 1. heartbeat and signal arrive, the fill never does
+    feed([signal("ORB_LONG_ENTRY", "LONG", entry=23100.0, stop=23050.0),
+          signal("SESSION_CLOSE_EXIT", "LONG", entry=23100.0, stop=23050.0,
+                 exit=23180.0),
+          signal("SESSION_SUMMARY", "LONG", traded=True)])
+    rep = audit()
+    check("P1 signal and heartbeat arrive but no fill does",
+          not rep.clean and any("reached the emulator" in n for n in names(rep)),
+          ", ".join(names(rep)))
+
+    reset()   # 2. the emulator acted, the decision stream did not arrive
+    feed([signal("SESSION_SUMMARY", "NONE", traded=False)])
+    write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1),
+                          fill("SESSION_CLOSE_EXIT", "LONG", 23180.0, 0)])
+    rep = audit()
+    check("P2 fills arrive with no signal channel behind them",
+          not rep.clean and any("orphan" in n for n in names(rep)),
+          ", ".join(names(rep)))
+
+    reset()   # 3. entry filled, exit fill never came, heartbeat says day ended
+    feed([signal("ORB_LONG_ENTRY", "LONG", entry=23100.0, stop=23050.0),
+          signal("SESSION_SUMMARY", "LONG", traded=True)])
+    write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)])
+    rep = audit()
+    check("P3 a heartbeat does NOT imply the position was closed",
+          not rep.clean and any("position was closed" in n for n in names(rep)),
+          ", ".join(names(rep)))
+
+    reset()   # 4. a stale heartbeat, rejected by the receiver's freshness gate
+    led = PE.Ledger()
+    try:
+        led.apply(signal("SESSION_SUMMARY", "NONE", traded=False,
+                         event_time="2020-01-01T10:00:00+0000"),
+                  persist=True, enforce_freshness=True)
+        stale_ok = False
+    except PE.Rejected as e:
+        stale_ok = "stale" in str(e)
+    rep = audit()
+    check("P4 a stale heartbeat is refused and cannot rescue the session",
+          stale_ok and not rep.clean
+          and any("reported in" in n for n in names(rep)))
+
+    reset()   # 5. a fill attributed to the wrong New York date
+    clean_session(date="2026-08-18")
+    lines = open(os.path.join(TMP, "fills.jsonl")).read().replace(
+        '"session_date": "2026-08-18"', '"session_date": "2026-08-17"', 1)
+    open(os.path.join(TMP, "fills.jsonl"), "w").write(lines)
+    a, b = audit("2026-08-18"), audit("2026-08-17")
+    check("P5 a misdated fill fails BOTH days, never silently one",
+          not a.clean and not b.clean,
+          f"2026-08-18={names(a)}  2026-08-17={names(b)}")
+
+    reset()   # 6. TradingView disabled the alert mid-session (rate limit)
+    feed([signal("ORB_LONG_ENTRY", "LONG", entry=23100.0, stop=23050.0)])
+    write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)])
+    rep = audit()
+    check("P6 an alert disabled mid-session loses the heartbeat and fails",
+          not rep.clean and any("reported in" in n for n in names(rep)),
+          "TradingView does not auto-re-enable, so no heartbeat at close "
+          "means it was down at close")
+
+    reset()   # 8. heartbeat claims no trade while a fill says otherwise
+    feed([signal("SESSION_SUMMARY", "NONE", traded=False)])
+    write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1),
+                          fill("ORB_STOP", "LONG", 23050.0, 0)])
+    rep = audit()
+    check("P8 a traded=false heartbeat cannot outvote an observed fill",
+          not rep.clean and any("heartbeat agrees" in n for n in names(rep)),
+          ", ".join(names(rep)))
+
     print("\nStrategy Tester export cross-check")
     reset()
     clean_session(entry=23100.0, exit_px=23180.0)
