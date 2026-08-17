@@ -512,6 +512,11 @@ f_payload(string evt, string dir, float px, float stp, float xpx) =>
      ',"s5b_direction":"' + s5bDirStr + '"' +
      ',"alignment":"'   + alignmentStr + '"' +
      ',"s5b_entry_eligible":' + (s5bEntryOk ? "true" : "false") +
+     // Whether the SESSION took a trade. On the end-of-session heartbeat this is
+     // what separates "the strategy declined today" from "nothing reached the
+     // receiver" — the two are otherwise indistinguishable and one of them is a
+     // dead pipeline.
+     ',"traded":'       + (tradeTaken ? "true" : "false") +
      ',"entry":'        + (na(px)  ? "null" : str.tostring(px)) +
      ',"stop":'         + (na(stp) ? "null" : str.tostring(stp)) +
      // The strategy's INTENDED exit price. Without it a hold-to-close exit has
@@ -549,6 +554,21 @@ if evtStop
     alert(f_payload("ORB_STOP", orbDirStr, entryPx, stopPx, exitPx), alert.freq_once_per_bar_close)
 if evtClose
     alert(f_payload("SESSION_CLOSE_EXIT", orbDirStr, entryPx, stopPx, exitPx), alert.freq_once_per_bar_close)
+
+// --- end-of-session heartbeat -------------------------------------------------
+// Fires on EVERY regular session, traded or not. Without it, a session in which
+// nothing arrives is indistinguishable from a session the strategy declined —
+// so a dead receiver, an expired alert or a paused alert would be recorded as a
+// clean no-trade day and counted toward the 20 sessions that gate live capital.
+// A pipeline must not be able to validate itself by being silent.
+//
+// It reports state only. It places no order and gates nothing.
+var bool summarySent = false
+if isNewSession
+    summarySent := false
+if isSessionLast and barstate.isconfirmed and not summarySent
+    summarySent := true
+    alert(f_payload("SESSION_SUMMARY", orbDirStr, entryPx, stopPx, exitPx), alert.freq_once_per_bar_close)
 
 // =============================================================================
 // PARITY EXPORT SERIES
@@ -625,12 +645,30 @@ wrongTimeframe = timeframe.period != "5"
 var int cLateClose = 0
 if exitReason == "SESSION_CLOSE_EXIT" and exitTs == time and nyMinute >= 960
     cLateClose += 1
+// An extended-hours chart is detectable BEFORE it costs anything, and it should
+// be: `cLateClose` only reports the damage after a session has already exited
+// five hours late. The discriminator has to be unambiguous, because the earlier
+// version flagged any bar outside 09:30-16:00 and false-positived on ordinary
+// RTH charts. Bars at or after the 18:00 Globex reopen, and bars before 09:00,
+// exist on NO regular-session chart under any exchange convention.
+var int cEthBars = 0
+if barstate.isconfirmed and (nyMinute >= 1080 or nyMinute < 540)
+    cEthBars += 1
 if wrongTimeframe and barstate.islast
     label.new(bar_index, high,
               "CONFIG ERROR\ntimeframe is " + timeframe.period + ", must be 5\n" +
               "Parity is not valid on this chart.",
               style = label.style_label_down, color = color.new(color.orange, 0),
               textcolor = color.black, size = size.normal)
+if cEthBars > 0 and barstate.islast
+    label.new(bar_index, low,
+              "CONFIG ERROR\nextended-hours chart (" + str.tostring(cEthBars) +
+              " overnight bars)\nSet the session to Regular trading hours.\n" +
+              "On an early-close day there is no 15:55 bar, so the exit falls\n" +
+              "through to the 18:00 Globex reopen. Measured: 30 of 48 shortened\n" +
+              "sessions exited ~5 hours late. Parity is not valid on this chart.",
+              style = label.style_label_up, color = color.new(color.red, 0),
+              textcolor = color.white, size = size.normal)
 
 // Counted on the first RTH bar, not on the calendar rollover: on an
 // extended-hours chart the NY date changes during Sunday evening, which would

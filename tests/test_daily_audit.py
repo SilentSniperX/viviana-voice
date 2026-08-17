@@ -92,7 +92,9 @@ def clean_session(date=DATE, entry=23100.0, stop=23050.0, exit_px=23180.0,
     entry_evt = "ORB_LONG_ENTRY" if direction == "LONG" else "ORB_SHORT_ENTRY"
     feed([signal(entry_evt, direction, date, entry=entry, stop=stop),
           signal(exit_event, direction, date, entry=entry, stop=stop,
-                 exit=exit_px)])
+                 exit=exit_px),
+          signal("SESSION_SUMMARY", direction, date, entry=entry, stop=stop,
+                 exit=exit_px, traded=True)])
     write("fills.jsonl", [
         fill(entry_evt, direction, entry, 1 if direction == "LONG" else -1, date),
         fill(exit_event, direction, exit_px, 0, date)])
@@ -240,12 +242,39 @@ def main() -> int:
           not rep.clean and any("better than" in n for n in names(rep)),
           ", ".join(names(rep)))
 
-    print("\nno-trade sessions")
+    print("\nno-trade sessions and the silence hole")
+    reset()
+    feed([signal("SESSION_SUMMARY", "NONE", traded=False)])
+    rep = audit()
+    check("a session the strategy declined, with its heartbeat, is clean",
+          rep.clean and rep.facts.get("traded") is False, ", ".join(names(rep)))
+
     reset()
     rep = audit()
-    check("a session the strategy declined is clean and marked untraded",
-          rep.clean and rep.facts.get("traded") is False)
+    check("TOTAL SILENCE is not a clean session",
+          not rep.clean and any("reported in" in n for n in names(rep)),
+          "a dead receiver or an expired alert must never bank a clean day")
+    check("and the verdict says so in the detail",
+          any("NOT a quiet session" in c["detail"] for c in rep.failures))
+
     reset()
+    feed([signal("SESSION_SUMMARY", "LONG", traded=True)])
+    rep = audit()
+    check("a heartbeat claiming a trade that never arrived fails",
+          not rep.clean and any("heartbeat agrees" in n for n in names(rep)),
+          ", ".join(names(rep)))
+
+    reset()
+    clean_session()
+    write("events.jsonl", [signal("SESSION_SUMMARY", "LONG", traded=True,
+                                  signal_id="sig|dup|summary")])
+    rep = audit()
+    check("two heartbeats in one session fails",
+          not rep.clean and any("reported in" in n for n in names(rep)),
+          ", ".join(names(rep)))
+
+    reset()
+    feed([signal("SESSION_SUMMARY", "NONE", traded=False)])
     write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)])
     rep = audit()
     check("an orphan fill with no signal behind it fails",
@@ -280,6 +309,7 @@ def main() -> int:
           not rep.clean and any("reference" in n for n in names(rep)),
           ", ".join(names(rep)))
     reset()
+    feed([signal("SESSION_SUMMARY", "NONE", REF_DATE, traded=False)])
     rep = audit(REF_DATE)
     check("not trading on a day the reference traded fails",
           not rep.clean and any("reference did" in n for n in names(rep)),
@@ -321,7 +351,8 @@ def main() -> int:
             ("2026-08-03", True, True), ("2026-08-04", False, True),
             ("2026-08-05", True, True), ("2026-08-06", True, False),
             ("2026-08-07", True, True)]):
-        PE.append(sl, {"date": d, "clean": clean, "traded": traded})
+        PE.append(sl, {"date": d, "clean": clean, "traded": traded,
+                       "mode": "live"})
     s = DA.streak(sl)
     check("the streak stops at the last failure", s["consecutive_clean"] == 3,
           json.dumps(s))
@@ -333,13 +364,14 @@ def main() -> int:
           s["live_capital_gate_met"] is False)
     check("the failing session is named",
           s["sessions_with_failures"] == ["2026-08-04"])
-    PE.append(sl, {"date": "2026-08-07", "clean": False, "traded": True})
+    PE.append(sl, {"date": "2026-08-07", "clean": False, "traded": True,
+                   "mode": "live"})
     check("re-auditing a session overwrites the earlier verdict",
           DA.streak(sl)["consecutive_clean"] == 0)
     os.remove(sl)
     for i in range(30):
         PE.append(sl, {"date": f"2026-09-{i + 1:02d}", "clean": True,
-                       "traded": True})
+                       "traded": True, "mode": "live"})
     s = DA.streak(sl)
     check("30 clean traded sessions validate the pipeline",
           s["pipeline_validated"] is True and s["consecutive_clean"] == 30)
@@ -348,7 +380,7 @@ def main() -> int:
     os.remove(sl)
     for i in range(25):
         PE.append(sl, {"date": f"2026-10-{i + 1:02d}", "clean": True,
-                       "traded": False})
+                       "traded": False, "mode": "live"})
     check("25 clean but untraded sessions do NOT validate the pipeline",
           DA.streak(sl)["pipeline_validated"] is False,
           "quiet days prove nothing about execution")

@@ -46,7 +46,13 @@ FILL_LOG = os.path.join(STATE_DIR, "fills.jsonl")
 
 ENTRY_EVENTS = {"ORB_LONG_ENTRY", "ORB_SHORT_ENTRY"}
 EXIT_EVENTS = {"ORB_STOP", "SESSION_CLOSE_EXIT"}
-STATE_EVENTS = {"S5B_LONG_CONFIRMED", "S5B_SHORT_CONFIRMED"}
+# SESSION_SUMMARY is the end-of-session heartbeat. It fires on every regular
+# session whether or not the strategy traded, and it exists so that SILENCE is
+# detectable: without it, a dead receiver or an expired TradingView alert looks
+# exactly like a session the strategy declined, and the daily audit would bank
+# it as clean toward the 20 sessions that gate live capital.
+SUMMARY_EVENT = "SESSION_SUMMARY"
+STATE_EVENTS = {"S5B_LONG_CONFIRMED", "S5B_SHORT_CONFIRMED", SUMMARY_EVENT}
 ALL_EVENTS = ENTRY_EVENTS | EXIT_EVENTS | STATE_EVENTS
 # S5b is a classifier and places no orders, so it can never produce a fill.
 FILL_EVENTS = ENTRY_EVENTS | EXIT_EVENTS
@@ -153,6 +159,11 @@ def validate(payload: dict, schema: dict, *, now: datetime | None = None,
             ok = any((t == "string" and isinstance(val, str))
                      or (t == "number" and isinstance(val, (int, float))
                          and not isinstance(val, bool))
+                     # `boolean` was missing here, so any field the schema
+                     # declared boolean was rejected as the wrong type. It went
+                     # unnoticed until a field of that type became required by a
+                     # check: the SESSION_SUMMARY heartbeat.
+                     or (t == "boolean" and isinstance(val, bool))
                      or (t == "null" and val is None)
                      or (t == "object" and isinstance(val, dict))
                      for t in types)
@@ -317,8 +328,11 @@ class Ledger:
         result: dict
 
         if event in STATE_EVENTS:
-            # S5b is a classifier. It is recorded and never trades.
+            # S5b is a classifier and the summary is a heartbeat. Both are
+            # recorded; neither ever trades.
             result = {"action": "state_recorded", "s5b_state": payload["s5b_state"]}
+            if event == SUMMARY_EVENT:
+                result["traded"] = bool(payload.get("traded"))
 
         elif event in ENTRY_EVENTS:
             if kill_engaged():

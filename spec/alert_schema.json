@@ -28,7 +28,8 @@
         "S5B_LONG_CONFIRMED",
         "S5B_SHORT_CONFIRMED",
         "ORB_STOP",
-        "SESSION_CLOSE_EXIT"
+        "SESSION_CLOSE_EXIT",
+        "SESSION_SUMMARY"
       ]
     },
     "symbol": {
@@ -116,6 +117,9 @@
         "number",
         "null"
       ]
+    },
+    "traded": {
+      "type": "boolean"
     }
   },
   "additionalProperties": true

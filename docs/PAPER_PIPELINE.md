@@ -21,7 +21,7 @@ of what was executed, and the daily audit is what turns them into a verdict.
 
 | channel | fires on | carries | goes to |
 |---|---|---|---|
-| **signal** | bar close, via `alert()` | what the strategy DECIDED — direction, entry, stop, intended exit, S5b state | `events.jsonl`, drives the position ledger |
+| **signal** | bar close, via `alert()` | what the strategy DECIDED — direction, entry, stop, intended exit, S5b state, **and an end-of-session heartbeat** | `events.jsonl`, drives the position ledger |
 | **fill** | order fill, via `alert_message` | what the emulator DID — fill price, quantity, resulting position | `fills.jsonl`, never touches the ledger |
 
 Keeping them apart is the whole point. If fills fed the ledger, the audit would
@@ -92,10 +92,24 @@ Fill channel, from `f_fill()`, placeholders expanded by TradingView at fill time
  "signal_id":"nq_orb_s5b_v1|NQ1!|20260817|ORB_LONG_ENTRY"}
 ```
 
-Six signal events: `ORB_LONG_ENTRY`, `ORB_SHORT_ENTRY`, `ORB_STOP`,
-`SESSION_CLOSE_EXIT`, `S5B_LONG_CONFIRMED`, `S5B_SHORT_CONFIRMED`. Only the
-first four can produce a fill — S5b is a classifier and places no orders, so a
-fill claiming to be an S5b event is rejected.
+Seven signal events: `ORB_LONG_ENTRY`, `ORB_SHORT_ENTRY`, `ORB_STOP`,
+`SESSION_CLOSE_EXIT`, `S5B_LONG_CONFIRMED`, `S5B_SHORT_CONFIRMED`,
+`SESSION_SUMMARY`. Only the first four can produce a fill — S5b is a classifier
+and places no orders, so a fill claiming to be an S5b event is rejected.
+
+### SESSION_SUMMARY — why silence is not clean
+
+`SESSION_SUMMARY` fires at the close of **every** regular session, traded or
+not, carrying `"traded": true|false` and the day's final state.
+
+It exists because without it a session where nothing arrives is
+indistinguishable from a session the strategy declined. A dead receiver, an
+expired alert, a paused alert or a wrong webhook URL would all have been
+recorded as clean no-trade days and counted toward the 20 sessions that gate
+live capital — a pipeline validating itself by being broken.
+
+The audit therefore **fails any session with no heartbeat**, and fails a
+heartbeat that disagrees with what was observed.
 
 ## 3. Run the receiver
 
@@ -171,6 +185,7 @@ What it checks:
 | slippage | entry and exit, signed so positive is always adverse; **fails above 1.5 points**, the kill threshold from `docs/DEPLOYMENT_ASSESSMENT.md` |
 | stop discipline | a stop may fill worse than its trigger, never better |
 | ledger | one closed trade, prices agreeing with the emulator's fills, executor flat |
+| **the heartbeat** | exactly one `SESSION_SUMMARY`, agreeing on whether the session traded — no heartbeat is a failure, never a quiet day |
 | rejections | anything beyond a routine duplicate alert fails the session |
 | reference | inside the canonical window: traded exactly when the reference did, same direction, net points within the known price-series tolerance |
 | export | with `--tv-export`: one trade for the date, direction and both prices agreeing with the fill alerts |
@@ -182,6 +197,27 @@ silence after that date means nothing.
 Every run appends one verdict record to `sessions.jsonl`. Re-auditing a session
 overwrites the earlier verdict, so a break can be corrected once it is
 understood, with both records left on the log.
+
+### Never miss a session
+
+```bash
+python3 executor/daily_audit.py --catch-up
+```
+
+Audits every weekday since the last audited session. Running the audit only on
+the days you remember to is not unattended operation: a week of dead receiver
+would otherwise leave no record at all, and the streak counts audited sessions.
+Catch-up turns a gap into N failing sessions instead of nothing.
+
+A real market holiday and a dead receiver both look like silence, and no
+calendar shipped in this repo would stay correct. So the default stays safe and
+the exception is an explicit, logged operator assertion:
+
+```bash
+python3 executor/daily_audit.py --mark-holiday 2026-11-26
+```
+
+Holiday and replay verdicts are excluded from the streak in both directions.
 
 ## 6. The streak that gates deployment
 
@@ -211,7 +247,20 @@ pipeline.
 python3 executor/paper_executor.py selftest        # 22 gates
 python3 tests/test_daily_audit.py                  # audit gates, incl. real HTTP
 python3 tests/test_e2e_paper_pipeline.py           # full chain over real HTTP
+python3 tests/replay_reference_sessions.py         # 4,022 real sessions
 ```
+
+`replay_reference_sessions.py` exists to prove the property the gate suite
+cannot: that the audit does **not** raise FALSE failures on ordinary sessions.
+A single false-failure mode would stall the live count indefinitely and be
+blamed on the market rather than on the tool. It replays every canonical
+session end to end — signals through the ledger, fills through the fill
+channel, then the audit — and currently reports **4,022 / 4,022 clean, 0
+payloads rejected**. It found a real defect on its first run: the schema
+validator had no `boolean` branch, so every heartbeat was being rejected.
+
+Every replayed verdict is written with `mode: "replay"` and the run asserts
+that none of them reached the streak.
 
 The end-to-end test replays a real reference session with four faults injected —
 duplicate alert, stale alert, malformed payload, second same-day entry — then

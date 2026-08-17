@@ -152,6 +152,18 @@ def main() -> int:
                   abs(body["dollars"] - body["points"] * 2) < 0.01,
                   f"${body['dollars']}")
 
+            print("STEP 6b — end-of-session heartbeat")
+            code, body = post({**base,
+                               "signal_id": f"nq_orb_s5b_v1|NQ1!|{sess}|SUMMARY",
+                               "event": "SESSION_SUMMARY", "direction": side,
+                               "event_time": stamp(0), "traded": True,
+                               "entry": float(trade["entry"]),
+                               "stop": float(trade["stop"]),
+                               "exit": float(trade["exit"])})
+            check("heartbeat recorded as state, reporting the session traded",
+                  code == 200 and body["action"] == "state_recorded"
+                  and body["traded"] is True, json.dumps(body))
+
             print("STEP 7 — a second entry arrives the same session")
             code, body = post({**entry_alert, "signal_id": "second-entry",
                                "event_time": stamp(0)})
@@ -176,7 +188,7 @@ def main() -> int:
                 n = sum(1 for _ in open(path)) if os.path.exists(path) else 0
                 print(f"   {name:16s} {n} record(s)")
             check("every accepted event is on the audit log",
-                  sum(1 for _ in open(os.path.join(tmp, "events.jsonl"))) == 3)
+                  sum(1 for _ in open(os.path.join(tmp, "events.jsonl"))) == 4)
             check("every rejection is logged with a reason",
                   sum(1 for _ in open(os.path.join(tmp, "rejected.jsonl"))) == 4)
             print("\n   rejection reasons recorded:")

@@ -43,8 +43,8 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from paper_executor import (COST_POINTS, ENTRY_EVENTS, EXIT_EVENTS,  # noqa: E402
-                            EVENT_LOG, QTY, REJECT_LOG, STATE_DIR, Ledger,
-                            append, load_fills, utcnow)
+                            EVENT_LOG, QTY, REJECT_LOG, STATE_DIR, SUMMARY_EVENT,
+                            Ledger, append, load_fills, utcnow)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CANONICAL = os.path.join(REPO, "reference", "canonical_orb_trades.csv")
@@ -70,8 +70,13 @@ LIVE_SESSIONS = 60
 class Report:
     """A session verdict. Any FAIL makes the session not clean; nothing else does."""
 
-    def __init__(self, date: str):
+    def __init__(self, date: str, mode: str = "live"):
         self.date = date
+        # "live" verdicts are the only ones the deployment streak counts. A
+        # replayed or backfilled session proves the AUDIT works; it proves
+        # nothing about the live pipeline, and letting it count would let the
+        # gate be satisfied without the pipeline ever running.
+        self.mode = mode
         self.checks: list[dict] = []
         self.facts: dict = {}
 
@@ -91,7 +96,8 @@ class Report:
         return not self.failures
 
     def to_record(self) -> dict:
-        return {"date": self.date, "audited_at": utcnow(), "clean": self.clean,
+        return {"date": self.date, "audited_at": utcnow(), "mode": self.mode,
+                "clean": self.clean,
                 "failures": [c["check"] for c in self.failures],
                 **self.facts,
                 "checks": self.checks}
@@ -178,11 +184,12 @@ def slippage(direction: str, leg: str, expected: float, actual: float) -> float:
 # The audit
 # ---------------------------------------------------------------------------
 
-def audit(date: str, tv_export: str | None = None) -> Report:
-    rep = Report(date)
+def audit(date: str, tv_export: str | None = None,
+          ledger: Ledger | None = None, mode: str = "live") -> Report:
+    rep = Report(date, mode)
     signals = load_signals(date)
     fills = load_fills(date)
-    led = Ledger.rebuild()
+    led = ledger if ledger is not None else Ledger.rebuild()
     ledger_trades = [c for c in led.closed
                      if str(c.get("session") or c.get("opened"))[:10] == date]
 
@@ -191,10 +198,36 @@ def audit(date: str, tv_export: str | None = None) -> Report:
     fill_entries = [f for f in fills if f["event"] in ENTRY_EVENTS]
     fill_exits = [f for f in fills if f["event"] in EXIT_EVENTS]
 
+    summaries = [s for s in signals if s["event"] == SUMMARY_EVENT]
+
     traded = bool(sig_entries or fill_entries)
     rep.facts = {"traded": traded, "signals": len(signals), "fills": len(fills),
                  "signal_entries": len(sig_entries), "fill_entries": len(fill_entries),
-                 "ledger_trades": len(ledger_trades)}
+                 "ledger_trades": len(ledger_trades),
+                 "heartbeat": len(summaries)}
+
+    # -- A0. the heartbeat ---------------------------------------------------
+    # THE most important check here, and the reason it runs first.
+    #
+    # Every other check compares things that arrived. None of them can see a
+    # session where NOTHING arrived — and that is exactly what a dead receiver,
+    # an expired TradingView alert, a paused alert or a wrong webhook URL looks
+    # like. Without the heartbeat those are indistinguishable from a session the
+    # strategy declined, so an entirely broken pipeline would bank clean
+    # no-trade sessions toward the 20 that gate live capital.
+    #
+    # The Pine emits SESSION_SUMMARY on every regular session, traded or not.
+    # Its absence is a failure, always.
+    rep.check("the strategy reported in at the session close",
+              len(summaries) == 1,
+              f"{len(summaries)} SESSION_SUMMARY heartbeats — 0 means nothing "
+              f"reached the receiver, which is NOT a quiet session"
+              if len(summaries) != 1 else "")
+    if summaries:
+        rep.check("the heartbeat agrees on whether the session traded",
+                  bool(summaries[0].get("traded")) == traded,
+                  f"heartbeat traded={summaries[0].get('traded')} "
+                  f"observed={traded}")
 
     # -- A. structure --------------------------------------------------------
     rep.check("one entry signal at most (frozen spec B: one trade/day)",
@@ -429,7 +462,8 @@ def read_sessions(path: str = SESSION_LOG) -> list[dict]:
 
 
 def streak(path: str = SESSION_LOG) -> dict:
-    sessions = read_sessions(path)
+    every = read_sessions(path)
+    sessions = [r for r in every if r.get("mode", "live") == "live"]
     run: list[dict] = []
     for rec in reversed(sessions):
         if not rec.get("clean"):
@@ -448,6 +482,9 @@ def streak(path: str = SESSION_LOG) -> dict:
                                     and traded >= LIVE_SESSIONS // 2}
     broken = [r["date"] for r in sessions if not r.get("clean")]
     out["sessions_with_failures"] = broken[-5:]
+    replayed = len(every) - len(sessions)
+    if replayed:
+        out["replayed_sessions_excluded"] = replayed
     return out
 
 
@@ -478,6 +515,44 @@ def resolve_date(raw: str) -> str:
     return now.strftime("%Y-%m-%d")
 
 
+def pending_sessions() -> list[str]:
+    """Weekdays from the last audited session up to yesterday, New York.
+
+    Running the audit only on the days you remember to run it is not unattended
+    operation: a week of dead receiver leaves no record at all, and the streak —
+    which counts audited sessions — sails on unaffected. Catch-up makes a gap
+    surface as N failing sessions instead of nothing.
+    """
+    audited = {r["date"] for r in read_sessions()}
+    end = datetime.strptime(resolve_date("yesterday"), "%Y-%m-%d")
+    start = (max(audited) if audited else None)
+    if start is None:
+        return []
+    cur = datetime.strptime(start, "%Y-%m-%d") + timedelta(days=1)
+    out = []
+    while cur <= end:
+        if cur.weekday() < 5 and cur.strftime("%Y-%m-%d") not in audited:
+            out.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    return out
+
+
+def mark_holiday(date: str) -> dict:
+    """Record a date as a non-session. Deliberately manual.
+
+    A market holiday and a dead receiver look identical from here — both are
+    silence — and no calendar shipped in this repo would stay correct. So the
+    default stays safe (silence is never clean) and an operator asserts the
+    exception explicitly, on the record.
+    """
+    rec = {"date": date, "audited_at": utcnow(), "mode": "holiday",
+           "clean": True, "traded": False, "failures": [],
+           "checks": [{"check": "operator asserted this date is not a trading "
+                                "session", "result": "PASS", "detail": ""}]}
+    append(SESSION_LOG, rec)
+    return rec
+
+
 def print_report(rep: Report) -> None:
     print(f"DAILY AUDIT — {rep.date}")
     print("=" * 72)
@@ -504,7 +579,31 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--no-record", action="store_true",
                     help="audit without appending to the session log")
+    ap.add_argument("--catch-up", action="store_true",
+                    help="audit every weekday since the last audited session")
+    ap.add_argument("--mark-holiday", metavar="DATE",
+                    help="assert a date was not a trading session (excluded "
+                         "from the streak; use only for real market holidays)")
     args = ap.parse_args(argv)
+
+    if args.mark_holiday:
+        print(json.dumps(mark_holiday(resolve_date(args.mark_holiday)), indent=2))
+        return 0
+
+    if args.catch_up:
+        pending = pending_sessions()
+        if not pending:
+            print("no unaudited sessions")
+        worst = 0
+        for d in pending:
+            rep = audit(d)
+            record_session(rep)
+            print(f"  {'CLEAN' if rep.clean else 'BREAK'}  {d}"
+                  + ("" if rep.clean
+                     else "  " + ", ".join(c["check"] for c in rep.failures)))
+            worst = max(worst, 0 if rep.clean else 1)
+        print("\n" + json.dumps(streak(), indent=2))
+        return worst
 
     if args.streak and not args.date:
         print(json.dumps(streak(), indent=2))
