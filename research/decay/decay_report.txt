@@ -1,0 +1,168 @@
+==============================================================================
+ORB EDGE DECAY DIAGNOSIS — no strategy change, diagnosis only
+==============================================================================
+trades 2295   2016-01-04 .. 2026-06-30
+
+stop == opposite OR extreme: 2295/2295
+  => a STOP-OUT IS a complete reversal back through the opening range.
+     The two requested metrics are the same measurement.
+
+------------------------------------------------------------------------------
+QUALIFIED BREAKOUT FREQUENCY  (trades / RTH sessions)
+------------------------------------------------------------------------------
+year    sessions  trades     freq
+2016         252     216    85.7%
+2017         251     211    84.1%
+2018         252     212    84.1%
+2019         252     212    84.1%
+2020         253     212    83.8%
+2021         251     227    90.4%
+2022         251     227    90.4%
+2023         250     212    84.8%
+2024         252     233    92.5%
+2025         251     219    87.3%
+2026         123     114    92.7%
+  calendar note: computed NYSE/CME holiday schedule; 2026 is part-year.
+
+------------------------------------------------------------------------------
+BY YEAR
+------------------------------------------------------------------------------
+year       n   stop%    exp R   exp pts     PF   win%  L exp R  S exp R
+2016     216   44.4%   -0.010     -0.62   0.94  39.8%    0.093   -0.123
+2017     211   41.2%   -0.007     -0.52   0.94  41.2%    0.075   -0.090
+2018     212   46.7%    0.083      1.02   1.04  40.6%    0.067    0.098
+2019     212   41.5%    0.001      0.46   1.03  42.0%    0.093   -0.095
+2020     212   45.8%    0.005     -4.24   0.90  44.3%    0.088   -0.099
+2021     227   38.8%    0.090      5.38   1.15  52.9%    0.123    0.051
+2022     227   44.9%    0.099     10.76   1.18  45.8%    0.068    0.127
+2023     212   43.9%    0.099      8.50   1.23  43.4%    0.126    0.067
+2024     233   45.5%    0.120      9.39   1.22  43.3%    0.190    0.055
+2025     219   40.6%    0.035      8.23   1.16  46.1%   -0.026    0.108
+2026     114   38.6%    0.071     -2.27   0.97  46.5%    0.088    0.050
+
+------------------------------------------------------------------------------
+BY ERA
+------------------------------------------------------------------------------
+metric                                 2016-2020     2021-2023     2024-2026
+trades                                      1063           666           566
+stop-out / full OR reversal                43.9%         42.5%         42.2%
+expectancy (R)                            +0.014        +0.096        +0.078
+expectancy (points)                        -0.78         +8.21         +6.59
+profit factor                               0.96          1.19          1.12
+win rate                                   41.6%         47.4%         45.1%
+
+LONG  n                                      551           347           296
+LONG  expectancy (R)                      +0.083        +0.107        +0.081
+LONG  profit factor                         1.07          1.23          1.09
+LONG  stop rate                            41.0%         42.4%         40.9%
+
+SHORT n                                      512           319           270
+SHORT expectancy (R)                      -0.060        +0.084        +0.073
+SHORT profit factor                         0.87          1.14          1.16
+SHORT stop rate                            47.1%         42.6%         43.7%
+
+------------------------------------------------------------------------------
+IS THE DIFFERENCE REAL?  (2024-2026 vs each earlier era)
+------------------------------------------------------------------------------
+
+  2024-2026 vs 2016-2020
+    stop rate      42.2% vs 43.9%   diff -1.7pp   z=-0.66  p=0.5082
+    expectancy R   +0.078 vs +0.014   diff +0.063R   permutation p=0.3401
+
+  2024-2026 vs 2021-2023
+    stop rate      42.2% vs 42.5%   diff -0.3pp   z=-0.09  p=0.9249
+    expectancy R   +0.078 vs +0.096   diff -0.018R   permutation p=0.7950
+
+  2016-2020 expectancy R = +0.014  95% CI [-0.061, +0.092]  n=1063
+
+  2021-2023 expectancy R = +0.096  95% CI [+0.004, +0.188]  n=666
+
+  2024-2026 expectancy R = +0.078  95% CI [-0.024, +0.186]  n=566
+
+------------------------------------------------------------------------------
+ROLLING 250 TRADES
+------------------------------------------------------------------------------
+  windows: 2046   (each ends on the date shown)
+
+window end     stop%    exp R     PF
+2017-03-01     42.8%   -0.014   0.92
+2017-07-31     41.6%   -0.029   0.94
+2017-12-18     39.6%    0.065   1.08
+2018-05-18     45.2%    0.065   1.14
+2018-10-11     42.0%    0.111   1.25
+2019-02-22     45.2%    0.097   1.09
+2019-07-25     43.2%    0.002   1.00
+2019-12-19     44.4%   -0.013   0.92
+2020-06-01     42.4%    0.012   0.91
+2020-10-07     46.0%    0.012   0.91
+2021-03-04     46.0%   -0.016   0.87
+2021-07-14     44.4%    0.002   0.97
+2021-11-29     38.8%    0.050   1.06
+2022-04-18     41.2%    0.131   1.21
+2022-08-22     43.6%    0.109   1.12
+2023-01-16     44.4%    0.113   1.19
+2023-06-08     43.2%    0.098   1.17
+2023-10-26     41.6%    0.142   1.39
+2024-03-25     44.8%    0.062   1.17
+2024-08-08     42.0%    0.148   1.37
+2024-12-11     44.4%    0.094   1.19
+2025-05-02     41.2%    0.211   1.50
+2025-09-15     42.8%    0.015   1.16
+2026-02-09     38.0%    0.055   1.21
+2026-06-23     41.2%    0.007   0.95
+2026-06-30     40.8%    0.002   0.90   <- most recent
+
+  stop rate   min 37.2%  max 49.2%  last 40.8%   percentile of last: 19
+  expectancy  min -0.072R max +0.211R last +0.002R   percentile of last: 18
+
+------------------------------------------------------------------------------
+PATH METRICS  (1-minute bars — 2023-01-01 onward ONLY)
+------------------------------------------------------------------------------
+  sessions with bars: 664 / 778 trades in range
+  trades with no usable bars: 114
+  opening range reconstructed but disagreeing with the recorded side: 0  (excluded)
+  coverage per group (analysed / trades in range):
+    2023         98 /  212  = 46%
+    2024        233 /  233  = 100%
+    2025        219 /  219  = 100%
+    2026H1      114 /  114  = 100%
+    2024-2026   566 /  566  = 100%
+
+group          n  re-enter OR  MFE<MAE order  med MFE R  med MAE R  +1R then stop
+2023          98        90.8%          53.1%       0.79       0.71           9.5%
+2024         233        87.1%          54.5%       0.91       0.74          20.0%
+2025         219        84.9%          53.0%       0.94       0.66          14.1%
+2026H1       114        88.6%          50.0%       0.72       0.64           9.1%
+2024-2026    566        86.6%          53.0%       0.88       0.69          15.7%
+
+  re-enter OR   = price traded back inside the opening range after entry
+  MFE<MAE order = the best favourable excursion happened BEFORE the worst
+                  adverse one (a trade that 'worked first')
+  +1R then stop = of trades that reached +1R favourable, the share that
+                  still ended as a stop-out — the reversal you asked about
+
+  2024-2026 vs 2023 (the only pre-2024 era with bars):
+    re-entry into OR     86.6% vs 90.8%   z=-1.16 p=0.2457
+    MFE before MAE       53.0% vs 53.1%   z=-0.01 p=0.9916
+    +1R then stopped     15.7% vs 9.5%   z=+1.05 p=0.2956
+
+------------------------------------------------------------------------------
+STRUCTURAL BREAK SCAN — no pre-chosen boundaries
+------------------------------------------------------------------------------
+  Era boundaries were picked by hand, so a real break could sit
+  between them. This tries EVERY split point with >=250 trades on
+  each side and reports the most extreme one found.
+
+  most extreme split: after trade 1118 (2021-03-30)
+    before +0.006R (n=1118)   after +0.099R (n=1177)   t=+1.78
+    direction: IMPROVEMENT after the split
+    p (max-|t| calibrated by 2000 permutations) = 0.5172
+
+------------------------------------------------------------------------------
+MOST RECENT 250 TRADES vs ALL PRIOR
+------------------------------------------------------------------------------
+  window: 2025-05-21 .. 2026-06-30
+  stop rate    40.8% vs 43.4%   z=-0.78 p=0.4379
+  expectancy   +0.002R vs +0.060R   permutation p=0.4948
+  recent 95% CI [-0.130, +0.138]  — contains zero: YES
+  points       -5.97 vs +4.82
