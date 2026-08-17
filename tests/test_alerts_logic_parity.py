@@ -170,11 +170,32 @@ def main() -> int:
             ("4 HIGH CONVICTION SHORT", "HIGH CONVICTION SHORT"),
             ("5 STOP", "NQ TRADE STOPPED"),
             ("6 SESSION CLOSE", "NQ SESSION EXIT"),
+            ("6b EARLY CLOSE", "EARLY CLOSE"),
             ("7 NO TRADE", "NO TRADE TODAY"),
             ("test", "NQ ALERT TEST")):
         check(f"alert {label}", needle in alert)
-    check("all eight alert() calls are present",
-          alert.count("alert(") == 8, f"{alert.count('alert(')} found")
+    check("all nine alert() calls are present",
+          alert.count("alert(") == 9, f"{alert.count('alert(')} found")
+
+    print("\nextended-hours handling")
+    # The 15:55 trigger MUST still be bounded to regular hours, or an
+    # early-close day on an ETH chart exits at the 18:00 Globex reopen.
+    check("the clock exit is bounded to regular hours",
+          "isSessionLast and inRth and barstate.isconfirmed" in alert)
+    check("leaving the session with a position open is a separate exit path",
+          "leftSession and barstate.isconfirmed" in alert)
+    check("and it books the LAST regular-hours bar's close, not the gap bar",
+          "exitPx     := close[1]" in alert)
+    check("the session-end definition covers both chart types",
+          "sessionEnded = (isSessionLast and inRth) or leftSession" in alert)
+    check("the no-trade summary uses that same definition",
+          "if sessionEnded and barstate.isconfirmed and not summarySent" in alert)
+    check("an extended-hours chart must be acknowledged, not merely tolerated",
+          "ethUnexpected = cEthBars > 0 and not ethOk" in alert)
+    # isSessionLast itself is unchanged, so the shared expression still matches
+    # the audited strategy — the ETH handling is additive, not a rewrite.
+    check("isSessionLast is still identical to the audited strategy",
+          binding(strat, "isSessionLast") == binding(alert, "isSessionLast"))
 
     print("\nS5b is context only, never an entry")
     check("the conviction alerts say so",

@@ -67,6 +67,7 @@ FINAL_BAR_MIN   = 955       // 15:55 NY — the reference's last bar
 
 showOR    = input.bool(true, "Show ORH / ORL lines")
 showHud   = input.bool(true, "Show status panel")
+ethOk     = input.bool(false, "Extended-hours chart is intentional")
 testFire  = input.bool(false, "SEND TEST ALERT (turn on to prove delivery)")
 
 // =============================================================================
@@ -77,6 +78,24 @@ nyDate        = year(time, TZ) * 10000 + month(time, TZ) * 100 + dayofmonth(time
 isNewSession  = nyDate != nz(nyDate[1], -1)
 isSessionLast = nyMinute >= FINAL_BAR_MIN or session.islastbar_regular
 inRth         = nyMinute >= OR_OPEN_MIN and nyMinute < 960
+
+// The session ends either at the 15:55 bar (normal day) or at the moment the
+// chart leaves regular hours with the day unfinished (early close).
+//
+// Why the second case exists: on an EXTENDED-HOURS chart an early-close day has
+// no 15:55 bar, so a bare `nyMinute >= 955` first becomes true at the 18:00
+// Globex reopen — five hours and one whole overnight gap after the reference
+// exits. Measured on the audited strategy: 30 of 48 shortened sessions exited
+// that late, worth -139.2 points.
+//
+// `leftSession` is true on the FIRST bar outside regular hours, and the bar
+// before it was therefore the session's last. Exiting there at `close[1]` books
+// the last regular-hours bar's close — exactly the reference price.
+//
+// On a regular-hours chart there are no bars outside the session, so
+// `leftSession` is never true and behaviour is bit-for-bit what it was.
+leftSession  = not inRth and nz(inRth[1], false)
+sessionEnded = (isSessionLast and inRth) or leftSession
 
 f_px(float v) => na(v) ? "n/a" : str.tostring(v, format.mintick)
 
@@ -202,6 +221,7 @@ stopHit = tradeTaken and not daySettled and not na(stopPx) and
 
 newStop  = false
 newClose = false
+newLate  = false
 // lint:same-bar-ok — see the note above: the stop is live on the entry bar.
 if tradeTaken and not daySettled
     if stopHit
@@ -209,11 +229,20 @@ if tradeTaken and not daySettled
         exitReason := "ORB_STOP"
         daySettled := true
         newStop    := true
-    else if isSessionLast and barstate.isconfirmed
+    else if isSessionLast and inRth and barstate.isconfirmed
         exitPx     := close                     // B: exit at RTH close
         exitReason := "SESSION_CLOSE_EXIT"
         daySettled := true
         newClose   := true
+    else if leftSession and barstate.isconfirmed
+        // Early close on an extended-hours chart. The PRICE is the reference
+        // price — the last regular-hours bar's close — but this bar is after
+        // the gap, so the notification is late. It gets its own message rather
+        // than pretending to be a normal exit.
+        exitPx     := close[1]
+        exitReason := "EARLY_CLOSE_EXIT"
+        daySettled := true
+        newLate    := true
 
 // =============================================================================
 // SECTION C — S5b classifier (state only; never trades in v1)
@@ -413,8 +442,20 @@ if newClose
           "\n\nTRADE IS OVER." +
           "\nNO SECOND TRADE TODAY.", alert.freq_once_per_bar)
 
+// 6b — early close (extended-hours charts only)
+// lint:same-bar-ok — edge flag
+if newLate
+    alert("\u26A0\uFE0F NQ SESSION EXIT — EARLY CLOSE" + lines +
+          "\nSIDE: " + orbDirStr +
+          "\nEXIT: " + f_px(exitPx) +
+          "\n\nThe market closed early today and this chart shows extended" +
+          "\nhours, so this notice is late. The exit price above is the" +
+          "\nlast regular-hours bar's close — the correct price." +
+          "\n\nIF YOU ARE STILL IN THIS TRADE, CLOSE IT NOW." +
+          "\n\nTRADE IS OVER. NO SECOND TRADE TODAY.", alert.freq_once_per_bar)
+
 // 7 — session finished with no qualified trade. Fires once, at the final bar.
-if isSessionLast and barstate.isconfirmed and not summarySent
+if sessionEnded and barstate.isconfirmed and not summarySent
     summarySent := true
     if not tradeTaken
         alert("⚪ NQ — NO TRADE TODAY" + lines +
@@ -454,7 +495,8 @@ var int cEthBars = 0
 if barstate.isconfirmed and (nyMinute >= 1080 or nyMinute < 540)
     cEthBars += 1
 
-cfgBad = timeframe.period != "5" or not chart.is_standard or cEthBars > 0
+ethUnexpected = cEthBars > 0 and not ethOk
+cfgBad = timeframe.period != "5" or not chart.is_standard or ethUnexpected
 if cfgBad and barstate.islast
     label.new(bar_index, high,
               "CONFIG ERROR\n" +
@@ -463,17 +505,32 @@ if cfgBad and barstate.islast
               (not chart.is_standard ?
                    "non-standard chart type — Heikin-Ashi / Renko / Range feed\n" +
                    "synthetic prices, so every level here is wrong\n" : "") +
-              (cEthBars > 0 ?
+              (ethUnexpected ?
                    "extended-hours chart (" + str.tostring(cEthBars) +
-                   " overnight bars)\nset the session to Regular trading hours\n" : "") +
+                   " overnight bars)\nEither set the session to Regular trading " +
+                   "hours, or tick\n'Extended-hours chart is intentional' in " +
+                   "the settings.\n" : "") +
               "These alerts are NOT the tested strategy on this chart.",
               style = label.style_label_down, color = color.new(color.red, 0),
               textcolor = color.white, size = size.normal)
 
-var table hud = table.new(position.top_right, 2, 6, border_width = 1)
+// Acknowledged extended-hours mode: a standing note, not an error. It states
+// the one thing that is genuinely different, so it is not mistaken for parity.
+if ethOk and cEthBars > 0 and barstate.islast
+    label.new(bar_index, low,
+              "EXTENDED-HOURS MODE (acknowledged)\n" +
+              "Setups, entries and stops are unchanged.\n" +
+              "On an EARLY-CLOSE day the exit price is still correct, but the\n" +
+              "notification arrives at the 18:00 reopen instead of the close.\n" +
+              "That affects ~2% of sessions. A regular-hours chart has no gap.",
+              style = label.style_label_up, color = color.new(color.orange, 20),
+              textcolor = color.white, size = size.small)
+
+var table hud = table.new(position.top_right, 2, 7, border_width = 1)
 if showHud and barstate.islast
-    stateTxt = daySettled and exitReason != "" ?
-                   (exitReason == "ORB_STOP" ? "STOPPED" : "CLOSED") :
+    exitTxt  = exitReason == "ORB_STOP" ? "STOPPED" :
+               exitReason == "EARLY_CLOSE_EXIT" ? "CLOSED (early)" : "CLOSED"
+    stateTxt = daySettled and exitReason != "" ? exitTxt :
                tradeTaken   ? "IN TRADE " + orbDirStr :
                pendingEntry ? "ARMED " + orbDirStr :
                daySettled   ? "NO TRADE" : "WAITING"
@@ -490,7 +547,13 @@ if showHud and barstate.islast
     table.cell(hud, 1, 4, s5bStateStr + (aligned ? " (ALIGNED)" : ""),
                                      text_color = aligned ? color.orange : color.white,
                                      text_size = size.small)
-    table.cell(hud, 0, 5, "TEST",    text_color = color.gray,  text_size = size.small)
-    table.cell(hud, 1, 5, testFire ? "ON — turn off" : "off",
+    table.cell(hud, 0, 5, "SESSION", text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 5, cEthBars > 0 ? (ethOk ? "extended (ok)" : "extended — CHECK")
+                                       : "regular",
+                                     text_color = cEthBars == 0 ? color.white :
+                                                  ethOk ? color.orange : color.red,
+                                     text_size = size.small)
+    table.cell(hud, 0, 6, "TEST",    text_color = color.gray,  text_size = size.small)
+    table.cell(hud, 1, 6, testFire ? "ON — turn off" : "off",
                                      text_color = testFire ? color.orange : color.gray,
                                      text_size = size.small)
