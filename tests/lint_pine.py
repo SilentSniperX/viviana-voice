@@ -17,6 +17,8 @@ TradingView error or a real zero-trade run was traced to it:
   L9  declaration after first use             -> undeclared identifier
   L10 top-level binding read before defined   -> undeclared identifier
   L11 user function called before defined     -> undeclared identifier
+  L12 BUILD_ID not matching the file contents -> a stale TradingView alert
+      snapshot would be accepted as the current build
 
 L4 is the important one. Pine runs the whole script top to bottom on every bar,
 so a `var` flag assigned early in the script is already true when a later block
@@ -179,6 +181,18 @@ def check(path: str) -> None:
                 fail("L11", f"line {i}: `{name}()` is called before it is defined "
                             f"on line {def_line}")
                 break
+
+    # L12 — the build stamp must track the file, or it is decoration
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from stamp_build_id import current, expected          # noqa: E402
+    want, have = expected(src), current(src)
+    if have is None:
+        fail("L12", "no BUILD_ID constant; a stale alert snapshot would be "
+                    "indistinguishable from the current build")
+    elif want != have:
+        fail("L12", f"BUILD_ID is stale: file says {have}, contents hash to "
+                    f"{want}. Run tests/stamp_build_id.py and RECREATE the "
+                    f"TradingView alerts.")
 
     print(f"checked {path} ({len(lines)} lines, {n} plots)")
 

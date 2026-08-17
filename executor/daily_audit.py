@@ -43,8 +43,9 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from paper_executor import (COST_POINTS, ENTRY_EVENTS, EXIT_EVENTS,  # noqa: E402
-                            EVENT_LOG, QTY, REJECT_LOG, STATE_DIR, SUMMARY_EVENT,
-                            Ledger, append, load_fills, utcnow)
+                            EVENT_LOG, EXPECTED_SYMBOL, QTY, REJECT_LOG,
+                            STATE_DIR, SUMMARY_EVENT, Ledger, append,
+                            expected_build_id, load_fills, utcnow)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CANONICAL = os.path.join(REPO, "reference", "canonical_orb_trades.csv")
@@ -90,16 +91,26 @@ class Report:
         self.checks: list[dict] = []
         self.facts: dict = {}
 
-    def check(self, name: str, ok: bool | None, detail: str = "") -> bool | None:
-        """ok=None means the check could not run (source absent) — never a pass."""
-        self.checks.append({"check": name,
-                            "result": "N/A" if ok is None else ("PASS" if ok else "FAIL"),
-                            "detail": detail})
+    def check(self, name: str, ok: bool | None, detail: str = "",
+              required: bool = True) -> bool | None:
+        """A REQUIRED check is PASS or BREAK. There is no third outcome.
+
+        `ok=None` means the check could not run because a source was absent —
+        and on a required check that IS the failure. The comment used to say
+        "never a pass" while `clean` only looked for FAIL, so an N/A quietly
+        counted as clean. Optional diagnostics pass `required=False`.
+        """
+        self.checks.append({
+            "check": name,
+            "result": "N/A" if ok is None else ("PASS" if ok else "FAIL"),
+            "required": required, "detail": detail})
         return ok
 
     @property
     def failures(self) -> list[dict]:
-        return [c for c in self.checks if c["result"] == "FAIL"]
+        return [c for c in self.checks
+                if c["result"] == "FAIL"
+                or (c["result"] == "N/A" and c.get("required", True))]
 
     @property
     def clean(self) -> bool:
@@ -216,6 +227,29 @@ def audit(date: str, tv_export: str | None = None,
                  "ledger_trades": len(ledger_trades),
                  "heartbeat": len(summaries)}
 
+    # -- A00. identity: which chart, and which build ------------------------
+    # Internal consistency is not identity. A complete trade on WRONG1! —
+    # heartbeat, signals, fills and ledger all agreeing — validated CLEAN,
+    # because nothing ever asked which chart it described. And every Pine
+    # revision since v1.3 called itself `nq_orb_s5b_v1`, so an alert created
+    # from an older snapshot was indistinguishable from the current build.
+    all_payloads = signals + fills
+    symbols = sorted({str(p.get("symbol")) for p in all_payloads})
+    builds = sorted({str(p.get("build_id")) for p in all_payloads})
+    if all_payloads:
+        rep.facts["symbols"] = symbols
+        rep.facts["build_ids"] = builds
+        rep.check("every payload is from the configured signal source",
+                  symbols == [EXPECTED_SYMBOL],
+                  f"saw {symbols}, configured {EXPECTED_SYMBOL!r}")
+        want_build = expected_build_id()
+        rep.check("every payload is from the deployed Pine build",
+                  want_build is not None and builds == [want_build],
+                  f"saw {builds}, deployed {want_build!r}"
+                  + ("" if want_build else
+                     " — NO deployed build id is known, so a stale TradingView "
+                     "alert snapshot could not be detected"))
+
     # -- A0. the heartbeat ---------------------------------------------------
     # THE most important check here, and the reason it runs first.
     #
@@ -234,10 +268,29 @@ def audit(date: str, tv_export: str | None = None,
               f"reached the receiver, which is NOT a quiet session"
               if len(summaries) != 1 else "")
     if summaries:
+        hb = summaries[0]
         rep.check("the heartbeat agrees on whether the session traded",
-                  bool(summaries[0].get("traded")) == traded,
-                  f"heartbeat traded={summaries[0].get('traded')} "
-                  f"observed={traded}")
+                  bool(hb.get("traded")) == traded,
+                  f"heartbeat traded={hb.get('traded')} observed={traded}")
+        # R9. The Pine draws a red CONFIG ERROR for an extended-hours chart, but
+        # a label only works if a human is looking at it. On an ordinary full
+        # session an ETH chart produces internally consistent signals and fills,
+        # so twenty sessions could validate while the chart was wrong — the
+        # defect only surfaces on shortened sessions. The chart state now
+        # travels in the heartbeat and the audit refuses it.
+        tf = hb.get("timeframe")
+        eth = hb.get("eth_bars")
+        rep.facts["chart"] = {"timeframe": tf, "eth_bars": eth}
+        rep.check("the chart is on the 5-minute timeframe",
+                  None if tf is None else tf == "5",
+                  f"timeframe={tf!r}" if tf is not None else
+                  "the heartbeat carries no timeframe (pre-r3 build)")
+        rep.check("the chart is regular trading hours, not extended",
+                  None if eth is None else eth == 0,
+                  f"{eth} overnight bars seen — an ETH chart exits shortened "
+                  f"sessions ~5 hours late" if eth else
+                  ("" if eth == 0 else
+                   "the heartbeat carries no ETH count (pre-r3 build)"))
 
     # -- A. structure --------------------------------------------------------
     rep.check("one entry signal at most (frozen spec B: one trade/day)",

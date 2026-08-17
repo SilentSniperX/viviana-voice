@@ -26,6 +26,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "executor"))
+from paper_executor import expected_build_id                    # noqa: E402
+BUILD = expected_build_id()
 EXEC = os.path.join(REPO, "executor", "paper_executor.py")
 PORT = 8801
 FAILURES: list[str] = []
@@ -89,6 +92,7 @@ def main() -> int:
             side = trade["direction"]
             sess = trade["date"]
             base = dict(strategy_version="nq_orb_s5b_v1", symbol="NQ1!",
+                        build_id=BUILD,
                         orb_direction=side, s5b_state="WAITING_FOR_LATCH",
                         alignment="UNRESOLVED", session_date=sess,
                         or_high=None, or_low=None)
@@ -157,6 +161,8 @@ def main() -> int:
                                "signal_id": f"nq_orb_s5b_v1|NQ1!|{sess}|SUMMARY",
                                "event": "SESSION_SUMMARY", "direction": side,
                                "event_time": stamp(0), "traded": True,
+                               "timeframe": "5", "eth_bars": 0,
+                               "chart_config_ok": True,
                                "entry": float(trade["entry"]),
                                "stop": float(trade["stop"]),
                                "exit": float(trade["exit"])})
@@ -217,7 +223,8 @@ def main() -> int:
                 except Exception:
                     time.sleep(0.1)
             fill = lambda evt, px, pos: {
-                "strategy_version": "nq_orb_s5b_v1", "channel": "fill",
+                "strategy_version": "nq_orb_s5b_v1", "build_id": BUILD,
+                "channel": "fill",
                 "event": evt, "symbol": "NQ1!", "direction": side,
                 "fill_price": px, "fill_qty": 1, "position_after": pos,
                 "order_comment": evt, "stop": float(trade["stop"]),

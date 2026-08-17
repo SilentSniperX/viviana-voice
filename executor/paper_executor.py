@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -72,6 +73,33 @@ POINT_VALUE = {"MNQ": 2.0, "NQ": 20.0}
 # every trade shows a constant 0.75-point difference and operators learn to
 # ignore the column that is supposed to surface real breaks.
 COST_POINTS = 0.75
+
+# THE signal source this validation run is for. A complete, internally
+# consistent trade on the wrong symbol used to validate CLEAN — every stream
+# agreed with every other stream, they just described a chart nobody was
+# validating. Internal consistency is not identity.
+EXPECTED_SYMBOL = os.environ.get("NQ_PAPER_SYMBOL", "NQ1!")
+
+
+def expected_build_id() -> str | None:
+    """The BUILD_ID of the Pine this receiver is validating.
+
+    Read from the Pine itself so it cannot drift from the deployed script; the
+    env var is for deployments that do not ship the repo. None disables the
+    check — which is logged loudly rather than done quietly, because a receiver
+    that accepts any build cannot tell a stale TradingView alert snapshot from
+    the current one.
+    """
+    env = os.environ.get("NQ_PAPER_BUILD_ID")
+    if env:
+        return env
+    try:
+        src = open(os.path.join(REPO, "pine", "nq_orb_s5b_v1.pine")).read()
+        m = re.search(r'^BUILD_ID\s*=\s*"([^"]*)"', src, re.M)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
 
 # Kill switch. Touch this file and the receiver accepts no new ENTRIES; exits
 # are still honoured so an open position can always be closed.
@@ -195,6 +223,7 @@ def validate(payload: dict, schema: dict, *, now: datetime | None = None,
                 raise Rejected(f"{key} has wrong type: {val!r}")
     if payload["event"] not in ALL_EVENTS:
         raise Rejected(f"unknown event {payload['event']!r}")
+    check_source(payload)
     if enforce_freshness:
         ts = parse_event_time(payload["event_time"])
         now = now or datetime.now(timezone.utc)
@@ -206,7 +235,7 @@ def validate(payload: dict, schema: dict, *, now: datetime | None = None,
 
 FILL_REQUIRED = ("strategy_version", "channel", "event", "symbol", "direction",
                  "fill_price", "fill_qty", "position_after", "signal_id",
-                 "session_date", "bar_time")
+                 "session_date", "bar_time", "build_id")
 
 
 def validate_fill(payload: dict, *, now: datetime | None = None,
@@ -228,6 +257,7 @@ def validate_fill(payload: dict, *, now: datetime | None = None,
     if payload["event"] not in FILL_EVENTS:
         raise Rejected(f"fill for an event that places no order "
                        f"{payload['event']!r}")
+    check_source(payload)
     if payload["direction"] not in ("LONG", "SHORT"):
         raise Rejected(f"fill direction {payload['direction']!r} is not LONG/SHORT")
     for key in ("fill_price", "fill_qty", "position_after"):
@@ -306,6 +336,30 @@ def load_fills(date: str | None = None, path: str = FILL_LOG) -> list[dict]:
             if date is None or str(p.get("session_date")) == date:
                 out.append(p)
     return out
+
+
+def check_source(payload: dict) -> None:
+    """Is this payload from the chart and the build we are actually validating?
+
+    Both answers used to be assumed. A trade on WRONG1! validated clean because
+    every stream agreed with every other stream, and every Pine revision since
+    v1.3 identified itself as `nq_orb_s5b_v1`, so an alert created from an older
+    snapshot was indistinguishable from the current build.
+    """
+    sym = payload.get("symbol")
+    if sym != EXPECTED_SYMBOL:
+        raise Rejected(f"symbol {sym!r} is not the configured signal source "
+                       f"{EXPECTED_SYMBOL!r} — this payload describes a chart "
+                       f"this validation run is not for")
+    want = expected_build_id()
+    got = payload.get("build_id")
+    if want is None:
+        return
+    if got != want:
+        raise Rejected(f"build_id {got!r} is not the deployed build {want!r} — "
+                       f"a TradingView alert is a SNAPSHOT of the script at "
+                       f"creation time, so recreate both alerts after any Pine "
+                       f"change")
 
 
 def parse_event_time(raw: str) -> datetime | None:
@@ -648,7 +702,8 @@ def reconcile(date: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def selftest() -> int:
-    base = dict(strategy_version="nq_orb_s5b_v1", symbol="NQ1!",
+    base = dict(strategy_version="nq_orb_s5b_v1", symbol=EXPECTED_SYMBOL,
+                build_id=expected_build_id(),
                 event_time="2026-08-17T09:50:00+0000", orb_direction="LONG",
                 s5b_state="WAITING_FOR_LATCH", alignment="UNRESOLVED",
                 session_date="2026-08-17")

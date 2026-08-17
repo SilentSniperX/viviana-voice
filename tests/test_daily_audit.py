@@ -35,6 +35,8 @@ sys.path.insert(0, os.path.join(REPO, "executor"))
 import daily_audit as DA                                        # noqa: E402
 import paper_executor as PE                                     # noqa: E402
 
+BUILD = PE.expected_build_id()
+
 FAILURES: list[str] = []
 DATE = "2026-08-17"                       # outside the canonical window
 REF_DATE = None                           # filled in from the reference below
@@ -55,18 +57,20 @@ def reset() -> None:
 
 
 def signal(event, direction, date=DATE, **kw) -> dict:
-    p = {"strategy_version": "nq_orb_s5b_v1",
+    p = {"strategy_version": "nq_orb_s5b_v1", "build_id": BUILD,
          "signal_id": f"sig|{date}|{event}", "event": event, "symbol": "NQ1!",
          "event_time": f"{date}T09:50:00-0400", "session_date": date,
          "direction": direction, "orb_direction": direction,
          "s5b_state": "WAITING_FOR_LATCH", "alignment": "UNRESOLVED"}
+    if event == "SESSION_SUMMARY":
+        p.update({"timeframe": "5", "eth_bars": 0, "chart_config_ok": True})
     p.update(kw)
     return p
 
 
 def fill(event, direction, price, pos_after, date=DATE, qty=1) -> dict:
-    return {"strategy_version": "nq_orb_s5b_v1", "channel": "fill",
-            "event": event, "symbol": "NQ1!", "direction": direction,
+    return {"strategy_version": "nq_orb_s5b_v1", "build_id": BUILD,
+            "channel": "fill", "event": event, "symbol": "NQ1!", "direction": direction,
             "fill_price": price, "fill_qty": qty, "position_after": pos_after,
             "order_comment": event, "stop": None, "session_date": date,
             "bar_time": NOW,
@@ -469,6 +473,108 @@ def main() -> int:
     check("R6 auditing the wrong date under clock skew fails, never passes",
           not skewed.clean and any("reported in" in n for n in names(skewed)),
           ", ".join(names(skewed)))
+
+    print("\nround-3 red-team: identity and chart configuration (R7-R9)")
+
+    # R7 — a complete, internally consistent trade on the WRONG SYMBOL
+    reset()
+    wrong = lambda p: {**p, "symbol": "WRONG1!"}
+    led = PE.Ledger()
+    rejected_at_door = 0
+    for p in [signal("ORB_LONG_ENTRY", "LONG", entry=23100.0, stop=23050.0),
+              signal("SESSION_CLOSE_EXIT", "LONG", entry=23100.0, stop=23050.0,
+                     exit=23180.0),
+              signal("SESSION_SUMMARY", "LONG", traded=True)]:
+        try:
+            led.apply(wrong(p), persist=True)
+        except PE.Rejected as e:
+            rejected_at_door += "not the configured signal source" in str(e)
+    check("R7 the receiver refuses payloads from another chart",
+          rejected_at_door == 3, f"{rejected_at_door}/3 refused")
+    # and if they reach the log anyway (edited file, older receiver), the audit
+    # must still refuse to call the session clean
+    reset()
+    write("events.jsonl", [wrong(signal("ORB_LONG_ENTRY", "LONG", entry=23100.0,
+                                        stop=23050.0)),
+                           wrong(signal("SESSION_CLOSE_EXIT", "LONG",
+                                        entry=23100.0, stop=23050.0,
+                                        exit=23180.0)),
+                           wrong(signal("SESSION_SUMMARY", "LONG", traded=True))])
+    write("fills.jsonl", [wrong(fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)),
+                          wrong(fill("SESSION_CLOSE_EXIT", "LONG", 23180.0, 0))])
+    rep = audit()
+    check("R7 an internally consistent trade on WRONG1! is NOT clean",
+          not rep.clean and any("signal source" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    check("R7 and the verdict records which symbols were seen",
+          rep.facts.get("symbols") == ["WRONG1!"], json.dumps(rep.facts.get("symbols")))
+
+    # R8 — a stale TradingView alert snapshot from an older Pine build
+    reset()
+    stale = lambda p: {**p, "build_id": "r2-0000deadbeef"}
+    led = PE.Ledger()
+    try:
+        led.apply(stale(signal("ORB_LONG_ENTRY", "LONG", entry=23100.0,
+                               stop=23050.0)), persist=True)
+        refused = False
+    except PE.Rejected as e:
+        refused = "not the deployed build" in str(e)
+    check("R8 the receiver refuses an alert from a different Pine build", refused)
+    reset()
+    write("events.jsonl", [stale(signal("ORB_LONG_ENTRY", "LONG", entry=23100.0,
+                                        stop=23050.0)),
+                           stale(signal("SESSION_CLOSE_EXIT", "LONG",
+                                        entry=23100.0, stop=23050.0,
+                                        exit=23180.0)),
+                           stale(signal("SESSION_SUMMARY", "LONG", traded=True))])
+    write("fills.jsonl", [stale(fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)),
+                          stale(fill("SESSION_CLOSE_EXIT", "LONG", 23180.0, 0))])
+    rep = audit()
+    check("R8 a stale build's session is NOT clean",
+          not rep.clean and any("deployed Pine build" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    check("R8 the build stamp tracks the file, so an unstamped edit is caught",
+          subprocess.run([sys.executable,
+                          os.path.join(REPO, "tests", "stamp_build_id.py"),
+                          "--check"], capture_output=True).returncode == 0)
+
+    # R9 — an ETH chart on an ordinary full session
+    reset()
+    clean_session()
+    lines = open(os.path.join(TMP, "events.jsonl")).read().replace(
+        '"eth_bars": 0', '"eth_bars": 96').replace(
+        '"chart_config_ok": true', '"chart_config_ok": false')
+    open(os.path.join(TMP, "events.jsonl"), "w").write(lines)
+    rep = audit()
+    check("R9 an ETH chart fails even on an ordinary full session",
+          not rep.clean and any("regular trading hours" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    reset()
+    clean_session()
+    lines = open(os.path.join(TMP, "events.jsonl")).read().replace(
+        '"timeframe": "5"', '"timeframe": "15"')
+    open(os.path.join(TMP, "events.jsonl"), "w").write(lines)
+    rep = audit()
+    check("R9 a wrong timeframe fails",
+          not rep.clean and any("5-minute" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    reset()
+    clean_session()
+    lines = [l for l in open(os.path.join(TMP, "events.jsonl"))]
+    import re as _re
+    lines = [_re.sub(r'"eth_bars": \d+, ', "", l) for l in lines]
+    open(os.path.join(TMP, "events.jsonl"), "w").writelines(lines)
+    rep = audit()
+    check("R9 a heartbeat that cannot answer the question is not a pass",
+          not rep.clean, ", ".join(names(rep)))
+
+    # N/A semantics — a required check that could not run is a BREAK
+    r = DA.Report("x")
+    r.check("required but unanswerable", None)
+    check("a required N/A makes the session unclean", not r.clean)
+    r2 = DA.Report("x")
+    r2.check("optional diagnostic", None, required=False)
+    check("an optional N/A does not", r2.clean)
 
     print("\nStrategy Tester export cross-check")
     reset()

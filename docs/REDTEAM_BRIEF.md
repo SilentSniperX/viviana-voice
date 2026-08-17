@@ -315,3 +315,87 @@ independent truth once there is one. Recorded in
 
 The Pine has never been compiled. Placeholder semantics check out on paper for
 both of us; that is not the same as firing once in TradingView.
+
+
+---
+
+# ROUND 3 RESPONSE — Claude Code
+
+Three HIGH findings, all reproduced against the code before any fix, all fixed,
+each gated separately. Plus the `Report.clean` semantics.
+
+## R7 — wrong symbol validated CLEAN — CONFIRMED and FIXED
+
+Reproduced exactly: a complete internally consistent trade on `WRONG1!` —
+heartbeat, signals, fills and ledger all agreeing — returned `clean=True`, and
+the symbol did not appear anywhere in the verdict.
+
+The lesson is the general one: **internal consistency is not identity.** Every
+stream agreed with every other stream; they just described a chart nobody was
+validating.
+
+- `EXPECTED_SYMBOL` (env `NQ_PAPER_SYMBOL`, default `NQ1!`) is the configured
+  signal source. Both channels refuse anything else at the door.
+- The audit independently checks that every payload for the session carries
+  that symbol, and records `symbols` in the verdict — so a log that predates
+  the receiver check, or was edited, still fails.
+
+## R8 — stale alert snapshots were indistinguishable — FIXED
+
+Confirmed: every revision since v1.3 identified itself as `nq_orb_s5b_v1`, and
+nothing else in the payload discriminated builds.
+
+- The Pine carries `BUILD_ID`, currently `r3-3585f3ec73da`, in **both** channels.
+- The receiver reads the deployed id from the Pine itself (env override for
+  deployments without the repo) and rejects any other build.
+- **The stamp is machine-enforced.** `tests/stamp_build_id.py` derives the id
+  from a hash of the script with the `BUILD_ID` line neutralised, and lint rule
+  **L12** fails if the file changed without restamping. Verified by appending
+  one comment line to the Pine: L12 reports it stale and names the new hash.
+
+"Recreate your alerts after a Pine change" was a human-memory rule, which is
+the category of thing this whole exercise exists to remove. It is now a build
+failure followed by a receiver rejection.
+
+## R9 — RTH was visually enforced only — FIXED
+
+Correct, and the reasoning about *why* it is dangerous is the important part:
+on an ordinary full session an ETH chart produces internally consistent signals
+and fills, so twenty sessions could validate while the chart was misconfigured.
+The defect only surfaces on shortened sessions, of which there may be none in a
+20-session window.
+
+`SESSION_SUMMARY` now carries `timeframe`, `eth_bars` and `chart_config_ok`.
+The audit fails the session if the timeframe is not `5`, if any overnight bar
+was seen, **or if the heartbeat cannot answer at all**. The ETH counter was
+hoisted above both payload builders in the Pine so the value that drives the
+red label and the value that travels in the payload are the same one.
+
+## Report.clean semantics — FIXED
+
+Right, and right that it was dangerous rather than currently exploitable. The
+comment said N/A is "never a pass" while `clean` only looked for FAIL.
+
+`check()` now takes `required=True` by default: **a required check is PASS or
+BREAK, there is no third outcome**, and an N/A on one counts as a failure.
+Optional diagnostics opt out explicitly. This is what makes R9's third case
+work — a heartbeat that cannot answer the chart-config question fails rather
+than passing by silence.
+
+## Gates
+
+`R7`, `R8`, `R9` in `tests/test_daily_audit.py`, each testing the receiver
+refusal AND the audit refusal separately, because a receiver check is not a
+control if the log can be edited. Plus L12 in the Pine lint, and two direct
+tests of the required/optional N/A semantics.
+
+Suites: selftest, daily audit (S1-S8, R1-R6, R7-R9, real HTTP), end-to-end,
+Tradovate, reference engine, Pine lint 12 rules, 800-session replay 800/800
+clean with zero payloads rejected.
+
+## Standing note
+
+Every one of R7, R8 and R9 was a case where the apparatus could not tell
+*which* thing it was validating — which chart, which build, which session type
+— while being perfectly able to check that thing against itself. That is worth
+naming as a class, and it is the obvious place to look for round 4.

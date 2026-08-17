@@ -41,6 +41,7 @@ import daily_audit as DA                                          # noqa: E402
 import paper_executor as PE                                       # noqa: E402
 
 CANONICAL = os.path.join(REPO, "reference", "canonical_orb_trades.csv")
+BUILD = PE.expected_build_id()
 
 
 def payloads(t: dict) -> tuple[list[dict], list[dict]]:
@@ -51,7 +52,8 @@ def payloads(t: dict) -> tuple[list[dict], list[dict]]:
     exit_evt = "ORB_STOP" if t["exit_reason"] == "stop" else "SESSION_CLOSE_EXIT"
     entry, stop, exit_px = float(t["entry"]), float(t["stop"]), float(t["exit"])
 
-    base = {"strategy_version": "nq_orb_s5b_v1", "symbol": "NQ1!",
+    base = {"strategy_version": "nq_orb_s5b_v1", "build_id": BUILD,
+            "symbol": "NQ1!",
             "session_date": date, "orb_direction": side,
             "s5b_state": "WAITING_FOR_LATCH", "alignment": "UNRESOLVED"}
     sig = lambda evt, **kw: {**base, "signal_id": f"nq_orb_s5b_v1|NQ1!|{date}|{evt}",
@@ -60,10 +62,12 @@ def payloads(t: dict) -> tuple[list[dict], list[dict]]:
     signals = [
         sig(entry_evt, entry=entry, stop=stop),
         sig(exit_evt, entry=entry, stop=stop, exit=exit_px),
-        sig("SESSION_SUMMARY", entry=entry, stop=stop, exit=exit_px, traded=True),
+        sig("SESSION_SUMMARY", entry=entry, stop=stop, exit=exit_px, traded=True,
+            timeframe="5", eth_bars=0, chart_config_ok=True),
     ]
     fill = lambda evt, px, pos: {
-        "strategy_version": "nq_orb_s5b_v1", "channel": "fill", "event": evt,
+        "strategy_version": "nq_orb_s5b_v1", "build_id": BUILD,
+        "channel": "fill", "event": evt,
         "symbol": "NQ1!", "direction": side, "fill_price": px, "fill_qty": 1,
         "position_after": pos, "order_comment": evt, "stop": stop,
         "session_date": date, "bar_time": f"{date}T20:00:00Z",
