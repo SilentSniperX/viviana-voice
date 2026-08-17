@@ -1,32 +1,65 @@
-# PAPER PIPELINE — setup and operation
+# PAPER PIPELINE — Phase 1 runs inside TradingView
 
 ```
-TradingView Pine  ->  strategy alert  ->  webhook  ->  executor  ->  audit ledger
+                    ┌─ signal alert  (bar close)   ─┐
+Pine strategy  ─────┤                               ├──► receiver ──► ledger ──┐
+(broker emulator)   └─ fill alert    (order fills)  ─┘              └► fills ──┤
+                                                                               ▼
+                                                                        daily audit
+                                                                     (clean / not clean)
 ```
 
-PAPER ONLY. `BrokerAdapter` has exactly one implementation, `PaperBroker`, with
-`live = False`, no transport and no credentials. Wiring a live broker is a
-separate, explicitly authorised change.
+**Execution happens entirely inside TradingView's Pine strategy and its broker
+emulator.** There is no external broker in Phase 1. The Tradovate adapter is
+built and its gates pass, but it is **DEFERRED** — `make_broker("tradovate")`
+refuses to start (`executor/brokers/README.md`). Wiring it is a live-capital
+decision after paper validation, not a runtime flag.
 
-## 1. TradingView alert
+That choice is what makes the two alert channels necessary. With no broker to
+query, TradingView's own fill reports are the **only independent observation**
+of what was executed, and the daily audit is what turns them into a verdict.
 
-One alert covers everything. `pine/nq_orb_s5b_v1.pine` calls `alert()` itself
-with a fully-formed JSON payload, so the alert message must be left as the
-default placeholder.
+| channel | fires on | carries | goes to |
+|---|---|---|---|
+| **signal** | bar close, via `alert()` | what the strategy DECIDED — direction, entry, stop, intended exit, S5b state | `events.jsonl`, drives the position ledger |
+| **fill** | order fill, via `alert_message` | what the emulator DID — fill price, quantity, resulting position | `fills.jsonl`, never touches the ledger |
 
-- Right-click the chart -> **Add alert**
-- Condition: **NQ ORB + S5b v1** -> **Any alert() function call**
+Keeping them apart is the whole point. If fills fed the ledger, the audit would
+be comparing the ledger against itself.
+
+---
+
+## 1. Two TradingView alerts
+
+Both are created on the **same chart** running `pine/nq_orb_s5b_v1.pine`.
+Chart must be **5-minute, regular trading hours, America/New York**
+(`docs/PARITY_PROCEDURE.md`).
+
+**Alert A — signal channel**
+
+- Condition: **NQ ORB + S5b v1** → **Any alert() function call**
+- Message: leave the default — the script supplies the whole JSON body
 - Expiration: **Open-ended**
-- Notifications -> **Webhook URL**: your receiver's public HTTPS URL
-- Message: leave as `{{strategy.order.alert_message}}` — the script supplies the body
+- Notifications → **Webhook URL**: your receiver's public HTTPS URL
+
+**Alert B — fill channel**
+
+- Condition: **NQ ORB + S5b v1** → **Order fills only**
+- Message: `{{strategy.order.alert_message}}` — this is required; the per-order
+  payload is built by `f_fill()` in the Pine
+- Expiration: **Open-ended**
+- Notifications → **Webhook URL**: the same receiver URL
+
+If the message field of Alert B is left as anything else, TradingView posts an
+unexpanded `{{...}}` template. The receiver **rejects that loudly** rather than
+recording an empty fill — it is the single most likely setup mistake and it must
+never be mistaken for a quiet session.
 
 Alerts run on TradingView's servers, so they keep firing with the browser closed.
 
-Chart must be **5-minute, regular trading hours** (`docs/PARITY_PROCEDURE.md`).
+## 2. Payloads
 
-## 2. Payload
-
-Emitted by `f_payload()` in the Pine, validated against `spec/alert_schema.json`:
+Signal channel, from `f_payload()`, validated against `spec/alert_schema.json`:
 
 ```json
 {"strategy_version":"nq_orb_s5b_v1",
@@ -36,14 +69,33 @@ Emitted by `f_payload()` in the Pine, validated against `spec/alert_schema.json`
  "direction":"LONG","orb_direction":"LONG",
  "s5b_state":"WAITING_FOR_LATCH","s5b_direction":"NONE","alignment":"UNRESOLVED",
  "s5b_entry_eligible":false,
- "entry":23100.25,"stop":23050.00,"or_high":23105.00,"or_low":23050.00}
+ "entry":23100.25,"stop":23050.00,"exit":null,
+ "or_high":23105.00,"or_low":23050.00}
 ```
 
 `signal_id` is deterministic — version, symbol, session, event and bar time — so
 a replayed alert is recognisably the same signal rather than a new one.
 
-Six events: `ORB_LONG_ENTRY`, `ORB_SHORT_ENTRY`, `ORB_STOP`,
-`SESSION_CLOSE_EXIT`, `S5B_LONG_CONFIRMED`, `S5B_SHORT_CONFIRMED`.
+`exit` carries the strategy's **intended** exit price: the stop on a stop exit,
+the RTH close price on a hold-to-close exit. Without it a close exit has nothing
+to measure the emulator's fill against, and slippage per side — the kill
+criterion — would only ever be observable on stop exits.
+
+Fill channel, from `f_fill()`, placeholders expanded by TradingView at fill time:
+
+```json
+{"strategy_version":"nq_orb_s5b_v1","channel":"fill",
+ "event":"ORB_LONG_ENTRY","symbol":"NQ1!","direction":"LONG",
+ "fill_price":23100.25,"fill_qty":1,"position_after":1,
+ "order_comment":"ORB_LONG_ENTRY","stop":23050.0,
+ "session_date":"2026-08-17","bar_time":"2026-08-17T13:50:00Z",
+ "signal_id":"nq_orb_s5b_v1|NQ1!|20260817|ORB_LONG_ENTRY"}
+```
+
+Six signal events: `ORB_LONG_ENTRY`, `ORB_SHORT_ENTRY`, `ORB_STOP`,
+`SESSION_CLOSE_EXIT`, `S5B_LONG_CONFIRMED`, `S5B_SHORT_CONFIRMED`. Only the
+first four can produce a fill — S5b is a classifier and places no orders, so a
+fill claiming to be an S5b event is rejected.
 
 ## 3. Run the receiver
 
@@ -67,13 +119,16 @@ secrets.
 | rule | behaviour |
 |---|---|
 | schema validation | rejected with the offending field named |
-| idempotency | duplicate `signal_id` rejected, never replayed |
+| idempotency | duplicate `signal_id` rejected, never replayed — on both channels |
 | one position | an entry while a position is open is rejected |
 | **one trade per day** | a second entry in the same `session_date` is rejected |
 | protective stop | resting stop submitted in the same handler as the entry |
 | no unprotected entry | an entry without a stop price is rejected |
+| **no invented prices** | an exit event with no exit price is rejected, never booked at the entry price |
 | exits only flatten | a stop or close can never reverse into a new position |
 | stale events | outside a 15-minute tolerance, rejected |
+| fills never trade | a fill payload is recorded and reconciled, never acted on |
+| unexpanded placeholders | a mis-configured alert message is rejected, not recorded |
 | kill switch | `touch $NQ_PAPER_DIR/KILL` refuses new entries; exits still honoured |
 | restart recovery | state rebuilt from the append-only log, corrupt lines skipped and counted |
 | audit | every accepted event and every rejection logged with a reason |
@@ -82,31 +137,96 @@ The one-trade-per-day and one-position rules are enforced here *as well as* in
 the Pine. A duplicated or erroneous alert must not be able to re-arm the day, so
 the executor does not trust the signal source.
 
-## 5. Daily reconciliation
+## 5. The daily audit — the Phase 1 deliverable
+
+Run once after each session closes:
 
 ```bash
-python3 executor/paper_executor.py reconcile --date 2026-08-17
+python3 executor/daily_audit.py --date 2026-08-17
 ```
 
-Compares the paper ledger against `reference/canonical_orb_trades.csv` for that
-session and reports `clean: true/false`. The paper ledger applies the same
-0.75-point round-turn cost as the reference, so a matching trade reconciles to
-`difference_points: 0.0` and any non-zero value is a real break.
-
-## 6. Prove the chain
+Optionally cross-check against the Strategy Tester's own record:
 
 ```bash
-python3 executor/paper_executor.py selftest        # 16 gates
+python3 executor/daily_audit.py --date 2026-08-17 \
+        --tv-export "NQ ORB + S5b v1 List of Trades.csv"
+```
+
+It reconciles three independently-produced streams — plus the canonical
+reference when the date falls inside its window — and prints PASS/FAIL per named
+check. Exit code is 0 only when the session is clean.
+
+What it checks:
+
+| group | check |
+|---|---|
+| structure | at most one entry signal and one entry fill; every signal reached the emulator; no orphan fill without a signal behind it |
+| direction | signal, fill and ledger all agree |
+| position | TradingView holds exactly one contract on the correct side after entry, and is flat after the exit |
+| **the position was closed** | no exit fill is a failure — hold-to-close is a frozen rule |
+| slippage | entry and exit, signed so positive is always adverse; **fails above 1.5 points**, the kill threshold from `docs/DEPLOYMENT_ASSESSMENT.md` |
+| stop discipline | a stop may fill worse than its trigger, never better |
+| ledger | one closed trade, prices agreeing with the emulator's fills, executor flat |
+| rejections | anything beyond a routine duplicate alert fails the session |
+| reference | inside the canonical window: traded exactly when the reference did, same direction, net points within the known price-series tolerance |
+| export | with `--tv-export`: one trade for the date, direction and both prices agreeing with the fill alerts |
+
+Outside the canonical window the audit says so explicitly rather than reading
+"no reference trade" as "no trade" — the reference ends 2026-06-30 and its
+silence after that date means nothing.
+
+Every run appends one verdict record to `sessions.jsonl`. Re-auditing a session
+overwrites the earlier verdict, so a break can be corrected once it is
+understood, with both records left on the log.
+
+## 6. The streak that gates deployment
+
+```bash
+python3 executor/daily_audit.py --streak
+```
+
+```json
+{"sessions_audited": 22, "consecutive_clean": 22, "of_which_traded": 14,
+ "pipeline_validated": true, "live_capital_gate_met": false,
+ "sessions_with_failures": []}
+```
+
+`docs/DEPLOYMENT_ASSESSMENT.md` Task 5 requires **20 consecutive clean sessions**
+to consider the pipeline validated and **60** before live capital.
+
+`of_which_traded` exists because the strategy declines a minority of sessions
+outright (2,295 trades across roughly 2,630 trading days in the reference
+window). A declined session is a legitimate outcome and counts as
+clean, but it proves nothing about execution — so neither gate opens unless at
+least half the streak actually traded. Quiet days cannot manufacture a validated
+pipeline.
+
+## 7. Prove the chain
+
+```bash
+python3 executor/paper_executor.py selftest        # 22 gates
+python3 tests/test_daily_audit.py                  # audit gates, incl. real HTTP
 python3 tests/test_e2e_paper_pipeline.py           # full chain over real HTTP
 ```
 
-The end-to-end test replays a real reference session: entry accepted with a
-resting stop, S5b recorded without trading, duplicate rejected, stale rejected,
-malformed rejected, stop flattens to the reference's exact net points, second
-same-day entry refused, state rebuilt after a restart, and reconciliation clean.
+The end-to-end test replays a real reference session with four faults injected —
+duplicate alert, stale alert, malformed payload, second same-day entry — then
+posts TradingView's fill reports and runs the audit. It asserts that the audit
+**refuses to call that session clean**, and that it does so without flagging the
+routine duplicate. A reconciliation tool that passed there would be
+manufacturing the streak that gates live capital.
 
-## 7. Gate before live capital
+`tests/test_daily_audit.py` covers the clean path and every break the audit must
+catch: an unclosed position, a fill in the wrong direction, excessive slippage,
+a stop filling better than its trigger, two contracts instead of one, an orphan
+fill, a direction disagreeing with the reference, and a Strategy Tester export
+that disagrees with the fill alerts.
+
+## 8. Before live capital
 
 `docs/DEPLOYMENT_ASSESSMENT.md` Task 5. In short: 20 consecutive clean sessions
-before the pipeline is considered validated, 60 before real money, self-funded
-or non-trailing drawdown only, and 1 MNQ per $20,000.
+before the pipeline is considered validated, 60 before real money, measured
+slippage at or below 0.75 points per side, self-funded or non-trailing drawdown
+only, and 1 MNQ per $20,000.
+
+Only then does the broker question reopen. Nothing in this document connects one.

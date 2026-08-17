@@ -38,11 +38,18 @@ STATE_DIR = os.environ.get("NQ_PAPER_DIR", os.path.join(REPO, "executor", "_stat
 EVENT_LOG = os.path.join(STATE_DIR, "events.jsonl")
 LEDGER_LOG = os.path.join(STATE_DIR, "ledger.jsonl")
 REJECT_LOG = os.path.join(STATE_DIR, "rejected.jsonl")
+# TradingView's broker emulator reports its own fills on a second alert
+# ("Order fills only"). Those land here and NEVER touch the position ledger —
+# they are the independent observation that the daily audit reconciles the
+# ledger against. Merging the two would destroy the only thing they are for.
+FILL_LOG = os.path.join(STATE_DIR, "fills.jsonl")
 
 ENTRY_EVENTS = {"ORB_LONG_ENTRY", "ORB_SHORT_ENTRY"}
 EXIT_EVENTS = {"ORB_STOP", "SESSION_CLOSE_EXIT"}
 STATE_EVENTS = {"S5B_LONG_CONFIRMED", "S5B_SHORT_CONFIRMED"}
 ALL_EVENTS = ENTRY_EVENTS | EXIT_EVENTS | STATE_EVENTS
+# S5b is a classifier and places no orders, so it can never produce a fill.
+FILL_EVENTS = ENTRY_EVENTS | EXIT_EVENTS
 
 STALE_TOLERANCE = timedelta(minutes=15)
 
@@ -162,6 +169,83 @@ def validate(payload: dict, schema: dict, *, now: datetime | None = None,
             raise Rejected(f"stale event_time {payload['event_time']}")
 
 
+FILL_REQUIRED = ("strategy_version", "channel", "event", "symbol", "direction",
+                 "fill_price", "fill_qty", "position_after", "signal_id",
+                 "session_date")
+
+
+def validate_fill(payload: dict) -> None:
+    """Gate a TradingView 'Order fills only' payload.
+
+    This is an OBSERVATION, not an instruction: it is recorded and reconciled,
+    never traded on. It still has to be well-formed, because the failure mode
+    that matters is silent — a mis-configured alert message posts the literal
+    template and an unvalidated audit would then compare nothing against nothing
+    and report a clean session.
+    """
+    for field in FILL_REQUIRED:
+        if field not in payload:
+            raise Rejected(f"fill payload missing required field {field!r}")
+    if payload["strategy_version"] != "nq_orb_s5b_v1":
+        raise Rejected(f"fill from an unknown strategy "
+                       f"{payload['strategy_version']!r}")
+    if payload["event"] not in FILL_EVENTS:
+        raise Rejected(f"fill for an event that places no order "
+                       f"{payload['event']!r}")
+    if payload["direction"] not in ("LONG", "SHORT"):
+        raise Rejected(f"fill direction {payload['direction']!r} is not LONG/SHORT")
+    for key in ("fill_price", "fill_qty", "position_after"):
+        val = payload[key]
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise Rejected(f"fill {key} is not a number: {val!r}")
+    if payload["fill_price"] <= 0:
+        raise Rejected(f"fill_price {payload['fill_price']!r} is not a price")
+    if payload["fill_qty"] <= 0:
+        raise Rejected(f"fill_qty {payload['fill_qty']!r} is not positive")
+    # An unexpanded placeholder means the alert's message field was not left as
+    # {{strategy.order.alert_message}}. Reject loudly: this is the single most
+    # likely setup mistake and it must not be mistaken for a quiet session.
+    for key, val in payload.items():
+        if isinstance(val, str) and "{{" in val:
+            raise Rejected(f"fill field {key!r} still contains an unexpanded "
+                           f"TradingView placeholder: {val!r}")
+
+
+def record_fill(payload: dict, seen: set[str] | None = None) -> dict:
+    validate_fill(payload)
+    sid = payload["signal_id"]
+    if seen is not None:
+        if sid in seen:
+            raise Rejected(f"duplicate fill signal_id {sid}")
+        seen.add(sid)
+    append(FILL_LOG, {"received": utcnow(), "payload": payload})
+    return {"action": "fill_recorded", "event": payload["event"],
+            "fill_price": payload["fill_price"],
+            "position_after": payload["position_after"]}
+
+
+def load_fills(date: str | None = None, path: str = FILL_LOG) -> list[dict]:
+    """Fill payloads, optionally for one session. Unusable lines are skipped."""
+    out = []
+    if not os.path.exists(path):
+        return out
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            p = rec.get("payload") if isinstance(rec, dict) else None
+            if not isinstance(p, dict):
+                continue
+            if date is None or str(p.get("session_date")) == date:
+                out.append(p)
+    return out
+
+
 def parse_event_time(raw: str) -> datetime | None:
     raw = str(raw).strip()
     for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z",
@@ -274,8 +358,17 @@ class Ledger:
         else:                                            # EXIT_EVENTS
             if self.position is None:
                 raise Rejected(f"{event} with no open position")
-            px = payload.get("stop") if event == "ORB_STOP" else payload.get("entry")
-            px = float(px) if px is not None else self.position["entry"]
+            # The exit price, in order of authority: the strategy's stated exit
+            # price, then the stop for a stop exit. There is no third option —
+            # falling back to the ENTRY price (as this did) books every
+            # hold-to-close trade at zero and hides the entire P&L.
+            px = payload.get("exit")
+            if px is None and event == "ORB_STOP":
+                px = payload.get("stop")
+            if px is None:
+                raise Rejected(f"{event} carries no exit price — refusing to "
+                               f"book a trade at a price the strategy never sent")
+            px = float(px)
             fill = self.broker.flatten_position(px)
             if self.resting_stop is not None:
                 self.broker.cancel_order(self.resting_stop["order_id"])
@@ -304,11 +397,31 @@ class Ledger:
         return {"open_position": self.position, "closed_trades": len(self.closed),
                 "net_points": round(sum(c["points"] for c in self.closed), 2),
                 "net_dollars": round(sum(c.get("dollars", 0) for c in self.closed), 2),
-                "signals_seen": len(self.seen), "unusable_log_lines": self.skipped,
+                "signals_seen": len(self.seen), "fills_recorded": len(load_fills()),
+                "unusable_log_lines": self.skipped,
                 "sessions_traded": len(self.sessions_traded),
                 "protective_stop": self.resting_stop,
                 "kill_switch": kill_engaged(),
                 "contract": CONTRACT, "qty": QTY}
+
+
+def make_broker(name: str) -> BrokerAdapter:
+    """Broker selection lives here and nowhere else. The Ledger only ever sees
+    the BrokerAdapter interface, so adding a venue never touches trading logic."""
+    name = (name or "paper").lower()
+    if name == "paper":
+        return PaperBroker()
+    if name == "tradovate":
+        # DEFERRED. Phase 1 paper validation runs entirely inside TradingView's
+        # strategy/broker emulator; no external broker is connected. The adapter
+        # is built and its gates pass (tests/test_tradovate_adapter.py) but it
+        # stays unwired until live-capital deployment is authorised.
+        raise SystemExit(
+            "the Tradovate adapter is DEFERRED and will not be connected.\n"
+            "Phase 1 paper validation runs inside TradingView's broker emulator.\n"
+            "The adapter exists and is tested; wiring it is a live-capital "
+            "decision, not a runtime flag.")
+    raise SystemExit(f"unknown broker {name!r} (paper|tradovate)")
 
 
 def kill_engaged() -> bool:
@@ -330,6 +443,10 @@ def append(path: str, rec: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def make_handler(ledger: Ledger):
+    # Fill ids already recorded, so a re-fired fill alert is rejected rather than
+    # double-counted. Seeded from the log so a restart does not forget.
+    fills_seen = {p["signal_id"] for p in load_fills() if p.get("signal_id")}
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -341,8 +458,16 @@ def make_handler(ledger: Ledger):
                 payload = json.loads(raw)
             except json.JSONDecodeError as exc:
                 return self.reject(f"malformed JSON: {exc}", raw)
+            if not isinstance(payload, dict):
+                return self.reject("payload is not a JSON object", raw)
             try:
-                result = ledger.apply(payload, enforce_freshness=True)
+                if payload.get("channel") == "fill":
+                    # TradingView's own fill report. Recorded for the daily
+                    # audit; it must not move the ledger, or the audit would be
+                    # comparing the ledger against itself.
+                    result = record_fill(payload, fills_seen)
+                else:
+                    result = ledger.apply(payload, enforce_freshness=True)
             except Rejected as exc:
                 return self.reject(str(exc), raw)
             self.respond(200, {"ok": True, **result})
@@ -533,10 +658,28 @@ def selftest() -> int:
         led5.apply(entry("k10"), persist=False)
         led5_pos = led5.position is not None
         open(KILL_FILE, "w").close()
+        # A close exit with no exit price cannot be booked: the old code fell
+        # back to the ENTRY price, which silently recorded every hold-to-close
+        # trade as flat and erased the strategy's entire P&L.
+        try:
+            led5.apply({**base, "signal_id": "k11b",
+                        "event": "SESSION_CLOSE_EXIT", "direction": "LONG",
+                        "entry": 100.0, "stop": 90.0}, persist=False)
+            ok = False
+        except Rejected as e:
+            ok = "no exit price" in str(e)
+        check("a close exit without an exit price is refused, never booked at "
+              "the entry price", ok)
         led5.apply({**base, "signal_id": "k11", "event": "SESSION_CLOSE_EXIT",
-                    "direction": "LONG", "entry": 101.0, "stop": 90.0}, persist=False)
+                    "direction": "LONG", "entry": 100.0, "stop": 90.0,
+                    "exit": 101.0}, persist=False)
         check("kill switch still allows an open position to be closed",
               led5_pos and led5.position is None)
+        check("the close exit is booked at the strategy's exit price",
+              led5.closed[-1]["exit"] == 101.0
+              and led5.closed[-1]["gross_points"] == 1.0,
+              json.dumps({k: led5.closed[-1][k]
+                          for k in ("exit", "gross_points", "points")}))
         KILL_FILE = keep_kill
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -560,7 +703,12 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8787)
+    s = sub.add_parser("serve")
+    s.add_argument("--port", type=int, default=8787)
+    s.add_argument("--broker", default=os.environ.get("BROKER_ADAPTER", "paper"),
+                   choices=["paper", "tradovate"],
+                   help="paper only; tradovate is built but DEFERRED and refuses "
+                        "to connect")
     r = sub.add_parser("replay"); r.add_argument("--log", default=EVENT_LOG)
     c = sub.add_parser("reconcile"); c.add_argument("--date", required=True)
     sub.add_parser("selftest")
@@ -577,8 +725,10 @@ def main(argv):
         return 0
 
     led = Ledger.rebuild()
-    print(f"PAPER executor on :{a.port} — broker={type(led.broker).__name__}, "
-          f"live=False")
+    led.broker = make_broker(a.broker)
+    print(f"executor on :{a.port} — broker={type(led.broker).__name__}, "
+          f"live={getattr(led.broker, 'live', 'unknown')}, "
+          f"contract={CONTRACT} x{QTY}")
     print(f"  state {STATE_DIR}\n  recovered {json.dumps(led.snapshot())}")
     HTTPServer(("", a.port), make_handler(led)).serve_forever()
 

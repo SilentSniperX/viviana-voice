@@ -194,6 +194,65 @@ def main() -> int:
                   rec.get("direction_match") is True)
             check("reconciliation reports no open position",
                   rec["open_position_at_report"] is False)
+
+            print("\nSTEP 11 — TradingView's own fill reports, and the daily audit")
+            proc = subprocess.Popen(
+                [sys.executable, EXEC, "serve", "--port", str(PORT)], env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(50):
+                try:
+                    state(); break
+                except Exception:
+                    time.sleep(0.1)
+            fill = lambda evt, px, pos: {
+                "strategy_version": "nq_orb_s5b_v1", "channel": "fill",
+                "event": evt, "symbol": "NQ1!", "direction": side,
+                "fill_price": px, "fill_qty": 1, "position_after": pos,
+                "order_comment": evt, "stop": float(trade["stop"]),
+                "session_date": sess, "bar_time": stamp(0),
+                "signal_id": f"nq_orb_s5b_v1|NQ1!|{sess}|{evt}"}
+            code, body = post(fill(f"ORB_{side}_ENTRY", float(trade["entry"]),
+                                   1 if side == "LONG" else -1))
+            check("entry fill recorded",
+                  code == 200 and body["action"] == "fill_recorded")
+            code, body = post(fill("ORB_STOP", float(trade["stop"]), 0))
+            check("stop fill recorded",
+                  code == 200 and body["action"] == "fill_recorded")
+            st = state()
+            check("fills did not disturb the position ledger",
+                  st["closed_trades"] == 1 and st["open_position"] is None
+                  and st["fills_recorded"] == 2, json.dumps(
+                      {k: st[k] for k in ("closed_trades", "fills_recorded")}))
+            out = subprocess.run(
+                [sys.executable, os.path.join(REPO, "executor", "daily_audit.py"),
+                 "--date", sess, "--json"], env=env, capture_output=True, text=True)
+            verdict = json.loads(out.stdout)
+            # This session had four faults injected into it in steps 3-7, so the
+            # audit MUST refuse to call it clean. A tool that passed here would
+            # be manufacturing the streak that gates live capital.
+            check("audit refuses to call a fault-injected session clean",
+                  out.returncode == 1 and verdict["clean"] is False,
+                  ", ".join(verdict.get("failures", [])))
+            check("the injected faults are named, the duplicate is not",
+                  verdict.get("duplicate_alerts_ignored") == 1
+                  and any("rejections" in f for f in verdict["failures"]),
+                  json.dumps({"failures": verdict["failures"],
+                              "rejections": verdict.get("rejections")}))
+            check("execution itself reconciled: direction, position and both legs",
+                  all(c["result"] != "FAIL" for c in verdict["checks"]
+                      if "reject" not in c["check"]),
+                  json.dumps([c["check"] for c in verdict["checks"]
+                              if c["result"] == "FAIL"]))
+            check("audit measured slippage against the emulator's fills",
+                  verdict.get("slippage_points") == {"entry": 0.0, "exit": 0.0},
+                  json.dumps(verdict.get("slippage_points")))
+            out = subprocess.run(
+                [sys.executable, os.path.join(REPO, "executor", "daily_audit.py"),
+                 "--streak"], env=env, capture_output=True, text=True)
+            s = json.loads(out.stdout)
+            check("a session with failures does not count toward the streak",
+                  s["consecutive_clean"] == 0
+                  and s["sessions_with_failures"] == [sess], json.dumps(s))
         finally:
             if proc.poll() is None:
                 proc.terminate()

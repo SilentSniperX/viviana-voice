@@ -104,6 +104,24 @@ isNewSession    = nyDate != nz(nyDate[1], -1)
 FINAL_BAR_MIN   = 955       // 15:55 NY
 isSessionLast   = nyMinute >= FINAL_BAR_MIN or session.islastbar_regular
 
+// --- fill-alert payload -------------------------------------------------------
+// Placeholders are expanded by TradingView at FILL time, so these carry the
+// emulator's actual fill price and position size — the values Phase 1 audits.
+// Kept minimal and separate from the richer bar-close payload in section F.
+f_fill(string evt, string dir, float stp) =>
+    '{"strategy_version":"nq_orb_s5b_v1","channel":"fill"' +
+     ',"event":"'  + evt + '"' +
+     ',"symbol":"{{ticker}}"' +
+     ',"direction":"' + dir + '"' +
+     ',"fill_price":{{strategy.order.price}}' +
+     ',"fill_qty":{{strategy.order.contracts}}' +
+     ',"position_after":{{strategy.position_size}}' +
+     ',"order_comment":"{{strategy.order.comment}}"' +
+     ',"stop":' + (na(stp) ? "null" : str.tostring(stp)) +
+     ',"session_date":"' + str.format_time(time, "yyyy-MM-dd", TZ) + '"' +
+     ',"bar_time":"{{timenow}}"' +
+     ',"signal_id":"nq_orb_s5b_v1|{{ticker}}|' + str.tostring(nyDate) + '|' + evt + '"}'
+
 // =============================================================================
 // SECTION B — ORB
 // =============================================================================
@@ -206,14 +224,22 @@ if barstate.isconfirmed and inQualWindow and orbSide == 0 and not tradeTaken and
         plannedStop = orbSide == 1 ? orL : orH
         cQualified += 1
         cSubmitted += 1
+        // `alert_message` rides on the ORDER, so an alert configured for
+        // "Order fills only" fires when the broker emulator actually FILLS,
+        // not at bar close. That is the channel Phase 1 reconciles: it reports
+        // the fill price and resulting position, not merely the signal.
         if orbSide == 1
-            strategy.entry("ORB_LONG", strategy.long, comment = "ORB_LONG_ENTRY")
+            strategy.entry("ORB_LONG", strategy.long, comment = "ORB_LONG_ENTRY",
+                 alert_message = f_fill("ORB_LONG_ENTRY", "LONG", plannedStop))
             strategy.exit("ORB_STOP_L", from_entry = "ORB_LONG", stop = plannedStop,
-                          comment = "ORB_STOP")
+                 comment = "ORB_STOP",
+                 alert_message = f_fill("ORB_STOP", "LONG", plannedStop))
         else
-            strategy.entry("ORB_SHORT", strategy.short, comment = "ORB_SHORT_ENTRY")
+            strategy.entry("ORB_SHORT", strategy.short, comment = "ORB_SHORT_ENTRY",
+                 alert_message = f_fill("ORB_SHORT_ENTRY", "SHORT", plannedStop))
             strategy.exit("ORB_STOP_S", from_entry = "ORB_SHORT", stop = plannedStop,
-                          comment = "ORB_STOP")
+                 comment = "ORB_STOP",
+                 alert_message = f_fill("ORB_STOP", "SHORT", plannedStop))
 
 // --- entry on the next 5m bar open (B) ----------------------------------------
 // The research engines skip the trade when the bar exactly 5 minutes after the
@@ -296,7 +322,8 @@ if barstate.isconfirmed and tradeTaken and not daySettled
 // `process_orders_on_close` stays false to preserve next-bar ENTRY semantics.
 // Without it the tester would book this exit at the following session's open.
 if isSessionLast and inPosition
-    strategy.close_all(comment = "SESSION_CLOSE_EXIT", immediately = true)
+    strategy.close_all(comment = "SESSION_CLOSE_EXIT", immediately = true,
+                       alert_message = f_fill("SESSION_CLOSE_EXIT", orbDirStr, stopPx))
 
 // =============================================================================
 // SECTION C — S5b classifier (state only; never places an order in v1)
@@ -468,7 +495,7 @@ sessionKey = str.tostring(nyDate)
 f_signalId(string evt) =>
     "nq_orb_s5b_v1|" + sym + "|" + sessionKey + "|" + evt + "|" + str.tostring(time)
 
-f_payload(string evt, string dir, float px, float stp) =>
+f_payload(string evt, string dir, float px, float stp, float xpx) =>
     '{"strategy_version":"nq_orb_s5b_v1"' +
      ',"signal_id":"'   + f_signalId(evt) + '"' +
      ',"event":"'       + evt + '"' +
@@ -484,6 +511,10 @@ f_payload(string evt, string dir, float px, float stp) =>
      ',"s5b_entry_eligible":' + (s5bEntryOk ? "true" : "false") +
      ',"entry":'        + (na(px)  ? "null" : str.tostring(px)) +
      ',"stop":'         + (na(stp) ? "null" : str.tostring(stp)) +
+     // The strategy's INTENDED exit price. Without it a hold-to-close exit has
+     // nothing to measure the emulator's fill against, and slippage per side —
+     // the kill criterion — would only be observable on stop exits.
+     ',"exit":'         + (na(xpx) ? "null" : str.tostring(xpx)) +
      ',"or_high":'      + (na(orH) ? "null" : str.tostring(orH)) +
      ',"or_low":'       + (na(orL) ? "null" : str.tostring(orL)) +
      ',"s5b_ob_high":'  + (na(obH) ? "null" : str.tostring(obH)) +
@@ -504,17 +535,17 @@ alertcondition(evtStop,     "ORB_STOP",            "ORB_STOP")
 alertcondition(evtClose,    "SESSION_CLOSE_EXIT",  "SESSION_CLOSE_EXIT")
 
 if evtOrbLong
-    alert(f_payload("ORB_LONG_ENTRY",  "LONG",  entryPx, stopPx), alert.freq_once_per_bar_close)
+    alert(f_payload("ORB_LONG_ENTRY",  "LONG",  entryPx, stopPx, na), alert.freq_once_per_bar_close)
 if evtOrbShort
-    alert(f_payload("ORB_SHORT_ENTRY", "SHORT", entryPx, stopPx), alert.freq_once_per_bar_close)
+    alert(f_payload("ORB_SHORT_ENTRY", "SHORT", entryPx, stopPx, na), alert.freq_once_per_bar_close)
 if evtS5bLong
-    alert(f_payload("S5B_LONG_CONFIRMED",  "LONG",  na, na), alert.freq_once_per_bar_close)
+    alert(f_payload("S5B_LONG_CONFIRMED",  "LONG",  na, na, na), alert.freq_once_per_bar_close)
 if evtS5bShort
-    alert(f_payload("S5B_SHORT_CONFIRMED", "SHORT", na, na), alert.freq_once_per_bar_close)
+    alert(f_payload("S5B_SHORT_CONFIRMED", "SHORT", na, na, na), alert.freq_once_per_bar_close)
 if evtStop
-    alert(f_payload("ORB_STOP", orbDirStr, entryPx, stopPx), alert.freq_once_per_bar_close)
+    alert(f_payload("ORB_STOP", orbDirStr, entryPx, stopPx, exitPx), alert.freq_once_per_bar_close)
 if evtClose
-    alert(f_payload("SESSION_CLOSE_EXIT", orbDirStr, entryPx, stopPx), alert.freq_once_per_bar_close)
+    alert(f_payload("SESSION_CLOSE_EXIT", orbDirStr, entryPx, stopPx, exitPx), alert.freq_once_per_bar_close)
 
 // =============================================================================
 // PARITY EXPORT SERIES

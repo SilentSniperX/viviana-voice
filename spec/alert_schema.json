@@ -87,6 +87,12 @@
         "null"
       ]
     },
+    "exit": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "or_high": {
       "type": [
         "number",

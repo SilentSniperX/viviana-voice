@@ -185,12 +185,20 @@ the same logic.
    malformed payload rejected, stale event rejected, restart reconstructs state,
    one position maximum, stop cannot reverse, session close flattens.
 3. Daily reconciliation runs unattended for **20 consecutive sessions** with
-   zero unexplained differences between reference signal, alert, and ledger.
+   zero unexplained differences between the strategy's signals, TradingView's
+   own fill reports, and the ledger. Measured by
+   `python3 executor/daily_audit.py --date <session>` each day and
+   `--streak` to count; sessions the strategy declined count as clean but
+   cannot make up more than half the streak.
 4. No live broker credentials present anywhere in the repo or alert payloads.
+   Phase 1 executes inside TradingView's broker emulator only — the Tradovate
+   adapter is built, gated and deliberately unwired.
 
 ### LIVE CAPITAL APPROVED — all must hold
 
-1. **60 consecutive paper sessions** with signal-to-ledger reconciliation clean.
+1. **60 consecutive paper sessions** with signal-to-fill-to-ledger
+   reconciliation clean (`executor/daily_audit.py --streak` reporting
+   `live_capital_gate_met: true`).
 2. Measured slippage ≤ **0.75 points per side**, the cost already in the
    reference.
 3. Account is **self-funded or has a non-trailing drawdown ≥ $10,000 per MNQ**.

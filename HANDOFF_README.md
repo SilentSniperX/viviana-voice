@@ -185,10 +185,17 @@ unmodified, with `AUDIT.md` alongside it. Summary:
    parity covers 764 of the 4,022 canonical sessions. The pre-2023 archive would
    close the rest; `tools/make_parity_upload.py` shrinks it to a shareable size
    losslessly (RTH-only, ~27% of rows).
-3. **Anything downstream of parity.** No webhook receiver, no paper executor, no
-   ledger. Deliberately not started: the executor consumes TradingView alerts, so
-   building it before the TradingView leg is verified means building on the one
-   untested link.
+3. **The paper pipeline against real TradingView traffic.** The receiver, the
+   ledger, the fill channel and the daily audit are built and their gates pass
+   against synthetic and replayed payloads (`executor/paper_executor.py
+   selftest`, `tests/test_daily_audit.py`, `tests/test_e2e_paper_pipeline.py`),
+   but no alert has yet arrived from TradingView itself. Phase 1 validation is
+   exactly that: run it live and count clean sessions
+   (`docs/PAPER_PIPELINE.md`).
+4. **No broker, by design.** Execution stays inside TradingView's strategy /
+   broker emulator. The Tradovate adapter exists and its gates pass against a
+   scripted fake, but it is unwired and its field names are unconfirmed —
+   `make_broker("tradovate")` refuses to start.
 
 ---
 
