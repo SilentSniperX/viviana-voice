@@ -26,7 +26,7 @@ docs/DEPLOYMENT_ASSESSMENT.md Task 5 requires (20 to validate the pipeline, 60
 before live capital).
 
 Run:
-    python3 executor/daily_audit.py --date 2026-08-17
+    python3 executor/daily_audit.py --date today          # or yesterday, or a date
     python3 executor/daily_audit.py --date 2026-08-17 --tv-export "List of Trades.csv"
     python3 executor/daily_audit.py --streak
 """
@@ -38,6 +38,7 @@ import csv
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -454,6 +455,29 @@ def streak(path: str = SESSION_LOG) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
+def resolve_date(raw: str) -> str:
+    """Accept `today` / `yesterday` as NEW YORK dates.
+
+    Sessions are keyed by the New York trading date. Running the audit from a
+    UTC box after 20:00 New York time would otherwise audit tomorrow, find
+    nothing, and record a spurious clean no-trade session — which would count
+    toward the streak that gates live capital.
+    """
+    if raw not in ("today", "yesterday"):
+        return raw
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/New_York"))
+    except Exception as exc:                       # no tzdata on this box
+        raise SystemExit(
+            f"cannot resolve {raw!r} to a New York date ({exc}). Pass an "
+            f"explicit --date YYYY-MM-DD rather than risk auditing the wrong "
+            f"session.")
+    if raw == "yesterday":
+        now -= timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
+
+
 def print_report(rep: Report) -> None:
     print(f"DAILY AUDIT — {rep.date}")
     print("=" * 72)
@@ -488,7 +512,7 @@ def main(argv: list[str]) -> int:
     if not args.date:
         ap.error("--date is required (or use --streak)")
 
-    rep = audit(args.date, args.tv_export)
+    rep = audit(resolve_date(args.date), args.tv_export)
     if not args.no_record:
         record_session(rep)
     if args.json:

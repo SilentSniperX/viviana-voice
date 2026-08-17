@@ -15,6 +15,8 @@ TradingView error or a real zero-trade run was traced to it:
   L7  line continuation at a 4-space multiple -> parsed as a new block, silent
   L8  more than 64 plots                      -> plot limit
   L9  declaration after first use             -> undeclared identifier
+  L10 top-level binding read before defined   -> undeclared identifier
+  L11 user function called before defined     -> undeclared identifier
 
 L4 is the important one. Pine runs the whole script top to bottom on every bar,
 so a `var` flag assigned early in the script is already true when a later block
@@ -138,7 +140,68 @@ def check(path: str) -> None:
                            f"on line {decl_line}")
                 break
 
+    # L10 — plain top-level binding READ before the line that defines it.
+    #
+    # Pine resolves identifiers in source order, so this is an "Undeclared
+    # identifier" compile error, not a runtime surprise. L9 only covered `var`
+    # declarations, which is why `orbDirStr` — defined in section D and used by
+    # the section-B close-exit alert 150 lines earlier — reached a copy/paste
+    # handoff. Sections are ordered by narrative, not by dependency, so the
+    # distance between definition and use is routinely large here.
+    code = [strip_literals(l) for l in lines]
+    bound: dict[str, int] = {}
+    for i, l in enumerate(code, 1):
+        m = re.match(r"^(\w+)\s*=(?!=|>)", l)
+        if m and "=>" not in l:
+            bound.setdefault(m.group(1), i)
+    for name, def_line in bound.items():
+        pattern = re.compile(rf"\b{re.escape(name)}\b")
+        for i, l in enumerate(code[:def_line - 1], 1):
+            if re.match(rf"^{re.escape(name)}\s*=(?!=|>)", l):
+                continue                      # an earlier binding of the name
+            if pattern.search(l):
+                fail("L10", f"line {i}: `{name}` is used before it is defined on "
+                            f"line {def_line}; Pine reports an undeclared "
+                            f"identifier")
+                break
+
+    # L11 — user function CALLED before it is defined. Same failure class as
+    # L10; Pine has no forward declarations.
+    funcs: dict[str, int] = {}
+    for i, l in enumerate(code, 1):
+        m = re.match(r"^(\w+)\s*\([^)]*\)\s*=>", l)
+        if m:
+            funcs.setdefault(m.group(1), i)
+    for name, def_line in funcs.items():
+        call = re.compile(rf"\b{re.escape(name)}\s*\(")
+        for i, l in enumerate(code[:def_line - 1], 1):
+            if call.search(l):
+                fail("L11", f"line {i}: `{name}()` is called before it is defined "
+                            f"on line {def_line}")
+                break
+
     print(f"checked {path} ({len(lines)} lines, {n} plots)")
+
+
+def strip_literals(line: str) -> str:
+    """Blank out comments and string literals so identifier scans see only code."""
+    out, quote = [], ""
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if c == quote:
+                quote = ""
+            out.append(" ")
+        elif c in "'\"":
+            quote = c
+            out.append(" ")
+        elif c == "/" and line[i + 1:i + 2] == "/":
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def main() -> int:

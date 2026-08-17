@@ -142,8 +142,12 @@ the executor does not trust the signal source.
 Run once after each session closes:
 
 ```bash
-python3 executor/daily_audit.py --date 2026-08-17
+python3 executor/daily_audit.py --date today        # or `yesterday`, or 2026-08-17
 ```
+
+`today` and `yesterday` resolve to **New York** dates. Running from a UTC box
+after 20:00 New York would otherwise audit tomorrow, find nothing, and bank a
+spurious clean no-trade session toward the streak.
 
 Optionally cross-check against the Strategy Tester's own record:
 

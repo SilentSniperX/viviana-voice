@@ -322,8 +322,11 @@ if barstate.isconfirmed and tradeTaken and not daySettled
 // `process_orders_on_close` stays false to preserve next-bar ENTRY semantics.
 // Without it the tester would book this exit at the following session's open.
 if isSessionLast and inPosition
+    // Spelled out rather than using `orbDirStr`: that is defined in section D,
+    // 150 lines BELOW this point, and Pine resolves identifiers in source order.
+    closeDir = orbSide == 1 ? "LONG" : orbSide == -1 ? "SHORT" : "NONE"
     strategy.close_all(comment = "SESSION_CLOSE_EXIT", immediately = true,
-                       alert_message = f_fill("SESSION_CLOSE_EXIT", orbDirStr, stopPx))
+                       alert_message = f_fill("SESSION_CLOSE_EXIT", closeDir, stopPx))
 
 // =============================================================================
 // SECTION C — S5b classifier (state only; never places an order in v1)
