@@ -1,8 +1,14 @@
 //@version=6
 // =============================================================================
-// NQ ORB + S5b v1.3  —  FROZEN SPEC IMPLEMENTATION
+// NQ ORB + S5b v1.4  —  FROZEN SPEC IMPLEMENTATION
 // =============================================================================
-// v1.3 fixes the ZERO-TRADE bug. The entry-evaluation block ran on the signal
+// v1.4: the RTH-close exit no longer depends on TradingView's session template.
+// Its futures regular session can run past 16:00, which would hold every
+// hold-to-close trade 15-20 minutes longer than the reference. The clock is now
+// authoritative. The session counter also no longer counts extended-hours
+// calendar rollovers as sessions. See docs/EXPECTANCY_REVIEW.md.
+//
+// v1.3 fixed the ZERO-TRADE bug. The entry-evaluation block ran on the signal
 // bar itself — Pine executes the whole script every bar, so `pendingEntry` set
 // near the top was already true when the block read it lower down — and it
 // cancelled the order it had just submitted. See the `time > signalBarTs` guard
@@ -88,10 +94,15 @@ alertSymbol     = input.string("", "Alert symbol override (blank = chart symbol)
 nyMinute        = hour(time, TZ) * 60 + minute(time, TZ)
 nyDate          = year(time, TZ) * 10000 + month(time, TZ) * 100 + dayofmonth(time, TZ)
 isNewSession    = nyDate != nz(nyDate[1], -1)
-// The final bar of the exchange's regular session. This is exchange-driven, so
-// shortened holiday sessions resolve correctly (the reference logs contain
-// 11:25 / 12:55 / 13:10 close bars — see reference/CROSS_ENGINE_AUDIT.md).
-isSessionLast   = session.islastbar_regular
+// The reference exits on the bar that OPENS at 15:55 and closes at 16:00. Do not
+// depend on TradingView's session template alone for that: its futures regular
+// session can run past 16:00 (16:15 is common), which would hold every
+// hold-to-close trade 15-20 minutes longer than the reference and quietly turn
+// winners into stop-outs. The clock is authoritative; `session.islastbar_regular`
+// is kept only to catch SHORTENED sessions, whose final bar comes earlier
+// (the reference logs contain 11:25 / 12:55 / 13:10 close bars).
+FINAL_BAR_MIN   = 955       // 15:55 NY
+isSessionLast   = nyMinute >= FINAL_BAR_MIN or session.islastbar_regular
 
 // =============================================================================
 // SECTION B — ORB
@@ -578,9 +589,16 @@ if wrongTimeframe and barstate.islast
               style = label.style_label_down, color = color.new(color.orange, 0),
               textcolor = color.black, size = size.normal)
 
+// Counted on the first RTH bar, not on the calendar rollover: on an
+// extended-hours chart the NY date changes during Sunday evening, which would
+// otherwise inflate this against `OR built`.
+var bool sessionCountedToday = false
 if isNewSession
-    cSessions += 1
+    sessionCountedToday := false
     orCountedToday := false
+if nyMinute >= OR_OPEN_MIN and nyMinute < 960 and not sessionCountedToday
+    cSessions += 1
+    sessionCountedToday := true
 if orReady and not orCountedToday
     cOrBuilt += 1
     orCountedToday := true
