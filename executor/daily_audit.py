@@ -57,11 +57,21 @@ TICK = 0.25
 # criterion 3). These are not tunable knobs; they are the published thresholds.
 SLIP_WARN = COST_POINTS
 SLIP_FAIL = 1.5
-# TradingView's NQ1! continuous is not FirstRate's back-adjusted series. The
-# measured difference is about 0.75 points per trade over 2,265 bar-matched
-# sessions, so a price comparison against the reference is only meaningful at a
-# coarser tolerance. Bar/direction comparisons carry no such excuse.
-REF_PRICE_TOL = 5.0
+# A constant continuous-contract offset shifts entry AND exit by the same
+# amount, so it CANCELS in net points. The old blanket 5.0 was therefore both
+# wrong in shape and far too loose — larger than the strategy's own 3.65-point
+# expectancy, so a real logic divergence could hide inside it.
+#
+# Measured on the 2,295-session TradingView export vs the canonical reference:
+#   exactly equal   90.2%      within 1.00 pt  97.8%
+#   within 0.50 pt  96.0%      within 2.00 pt  98.5%
+# The residual above 2 points is dominated by shortened sessions (2020-11-27,
+# 2021-11-26, 2020-12-24, 2020-07-03, 2023-01-16) — the known ETH-chart late
+# exits, which an RTH chart removes.
+REF_NET_TOL = 2.0
+# The price LEVEL difference is the feed offset itself. It is reported as a
+# fact, never failed: failing it would be failing the session for using
+# TradingView's continuous contract, which is the whole point of Phase 1.
 
 VALIDATE_SESSIONS = 20
 LIVE_SESSIONS = 60
@@ -410,10 +420,16 @@ def _reference_checks(rep: Report, date: str, direction: str | None,
         if ledger_trade:
             d = round(ledger_trade["points"] - float(ref["net_points"]), 2)
             rep.facts["difference_vs_reference_points"] = d
-            rep.check("net points within the known price-series tolerance",
-                      abs(d) <= REF_PRICE_TOL,
-                      f"{d:+.2f} pts (tolerance {REF_PRICE_TOL}, "
-                      f"NQ1! continuous vs back-adjusted)")
+            # The feed offset cancels in net points, so this tolerance is tight
+            # on purpose: anything beyond it is a logic difference, not a
+            # different price series.
+            rep.check("net points match the reference",
+                      abs(d) <= REF_NET_TOL,
+                      f"{d:+.2f} pts (tolerance {REF_NET_TOL}; a feed offset "
+                      f"cancels in net points, so this is logic divergence)")
+            # Reported, never failed — this IS the continuous-contract offset.
+            rep.facts["feed_offset_points"] = round(
+                ledger_trade["entry"] - float(ref["entry"]), 2)
 
 
 def _export_checks(rep: Report, date: str, path: str, direction: str,
@@ -461,9 +477,61 @@ def read_sessions(path: str = SESSION_LOG) -> list[dict]:
     return [latest[d] for d in sorted(latest)]
 
 
+def all_records(path: str = SESSION_LOG) -> list[dict]:
+    """EVERY verdict ever written, in order. Not deduplicated."""
+    out = []
+    if not os.path.exists(path):
+        return out
+    with open(path) as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and rec.get("date"):
+                out.append(rec)
+    return out
+
+
 def streak(path: str = SESSION_LOG) -> dict:
-    every = read_sessions(path)
-    sessions = [r for r in every if r.get("mode", "live") == "live"]
+    """Consecutive clean LIVE sessions.
+
+    Deliberately NOT built on `read_sessions` (latest-wins). The streak asserts
+    that the pipeline worked in REALTIME on 20 consecutive sessions. A session
+    that failed, failed — re-auditing it later after the logs were repaired
+    cannot make it true that the pipeline worked on the day. So:
+
+      * a date is broken if ANY live verdict for it was a break, ever;
+      * a `holiday` record cannot rescue a date that has a live verdict;
+      * clearing the record requires an explicit RESET, which starts from zero
+        and is itself written to the log.
+
+    Without this, the two cheapest ways to reach 20 are to re-audit the failures
+    and to declare them holidays.
+    """
+    every = all_records(path)
+    reset_at = max((r["date"] for r in every
+                    if r.get("mode") == "reset"), default=None)
+    if reset_at:
+        every = [r for r in every if r["date"] >= reset_at]
+
+    live_dates: dict[str, dict] = {}
+    for r in every:
+        if r.get("mode", "live") != "live":
+            continue
+        d = r["date"]
+        prev = live_dates.get(d)
+        # first verdict wins on cleanliness; a later break can still break it,
+        # but a later CLEAN can never un-break an earlier BREAK
+        if prev is None:
+            live_dates[d] = dict(r)
+        elif not r.get("clean"):
+            live_dates[d] = dict(r)
+        elif not prev.get("clean"):
+            pass                                  # stays broken, permanently
+    holidays = {r["date"] for r in every if r.get("mode") == "holiday"}
+    sessions = [live_dates[d] for d in sorted(live_dates)]
+    overridden = sorted(holidays & set(live_dates))
     run: list[dict] = []
     for rec in reversed(sessions):
         if not rec.get("clean"):
@@ -482,9 +550,14 @@ def streak(path: str = SESSION_LOG) -> dict:
                                     and traded >= LIVE_SESSIONS // 2}
     broken = [r["date"] for r in sessions if not r.get("clean")]
     out["sessions_with_failures"] = broken[-5:]
-    replayed = len(every) - len(sessions)
+    out["streak_reset_at"] = reset_at
+    replayed = sum(1 for r in every if r.get("mode") == "replay")
     if replayed:
         out["replayed_sessions_excluded"] = replayed
+    if overridden:
+        # A holiday marker on a date that also has a live audit is not a
+        # holiday; it is an attempted override. Surfaced, never honoured.
+        out["holiday_markers_ignored"] = overridden
     return out
 
 
@@ -538,17 +611,53 @@ def pending_sessions() -> list[str]:
 
 
 def mark_holiday(date: str) -> dict:
-    """Record a date as a non-session. Deliberately manual.
+    """Record a date as a non-session. Deliberately manual, and REFUSED for any
+    date the pipeline already spoke about.
 
     A market holiday and a dead receiver look identical from here — both are
     silence — and no calendar shipped in this repo would stay correct. So the
     default stays safe (silence is never clean) and an operator asserts the
     exception explicitly, on the record.
+
+    But a holiday marker must never be usable to erase a FAILED live session.
+    If the strategy sent a heartbeat, a signal or a fill on that date, or the
+    date already carries a live verdict, then it was a trading session and no
+    assertion can change that.
     """
+    evidence = []
+    if any(r.get("mode", "live") == "live" for r in all_records()
+           if r["date"] == date):
+        evidence.append("a live audit verdict already exists for this date")
+    if load_signals(date):
+        evidence.append(f"{len(load_signals(date))} signal alert(s) arrived")
+    if load_fills(date):
+        evidence.append(f"{len(load_fills(date))} fill alert(s) arrived")
+    if evidence:
+        raise SystemExit(
+            f"REFUSED: {date} is not a holiday.\n  " + "\n  ".join(evidence) +
+            "\nA holiday marker cannot be used to clear a failed session. If "
+            "the pipeline genuinely needs a fresh start, use --reset-streak, "
+            "which restarts the count from zero and is recorded on the log.")
     rec = {"date": date, "audited_at": utcnow(), "mode": "holiday",
            "clean": True, "traded": False, "failures": [],
            "checks": [{"check": "operator asserted this date is not a trading "
                                 "session", "result": "PASS", "detail": ""}]}
+    append(SESSION_LOG, rec)
+    return rec
+
+
+def reset_streak(reason: str) -> dict:
+    """Start the count again from zero, on the record.
+
+    The honest way out of a broken streak. It cannot shorten the count — it can
+    only discard progress — so there is no incentive to abuse it, and the log
+    keeps every verdict that came before.
+    """
+    rec = {"date": resolve_date("today"), "audited_at": utcnow(),
+           "mode": "reset", "clean": True, "traded": False, "failures": [],
+           "reason": reason,
+           "checks": [{"check": "operator reset the validation streak to zero",
+                       "result": "PASS", "detail": reason}]}
     append(SESSION_LOG, rec)
     return rec
 
@@ -581,10 +690,16 @@ def main(argv: list[str]) -> int:
                     help="audit without appending to the session log")
     ap.add_argument("--catch-up", action="store_true",
                     help="audit every weekday since the last audited session")
+    ap.add_argument("--reset-streak", metavar="REASON",
+                    help="restart the validation count from zero, on the record")
     ap.add_argument("--mark-holiday", metavar="DATE",
                     help="assert a date was not a trading session (excluded "
                          "from the streak; use only for real market holidays)")
     args = ap.parse_args(argv)
+
+    if args.reset_streak:
+        print(json.dumps(reset_streak(args.reset_streak), indent=2))
+        return 0
 
     if args.mark_holiday:
         print(json.dumps(mark_holiday(resolve_date(args.mark_holiday)), indent=2))

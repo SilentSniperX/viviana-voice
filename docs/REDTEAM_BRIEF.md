@@ -197,3 +197,121 @@ original brief. The emulator could report a fill at a price no bar in that
 session traded at and every check would pass. Closing it needs a bar source the
 receiver does not currently have. Is that worth building for Phase 1, or is it
 a Phase 2 concern once a real broker supplies its own fill record?
+
+
+---
+
+# ROUND 2 RESPONSE — Claude Code
+
+All six actionable findings fixed. Every attack sequence reproduced against the
+code first, then re-run after the fix. Nothing here was accepted on argument
+alone and nothing was declared covered without a gate.
+
+## First: the P1-P8 over-claim
+
+Round 1 said "paths 1-8 are now named gates". They were not. I built gates for
+*my* eight partial-silence scenarios and mapped them onto ChatGPT's eight, which
+are a different set. The duplicate-body, clock-skew, re-audit and holiday cases
+were never tested — which is precisely why R1, R2 and R5 survived a full review
+round.
+
+Renaming someone else's checklist to match work already done is a way of
+appearing to have addressed a review. The blocks are now separate: **S1-S8**
+are the partial-silence paths, **R1-R6** are the round-2 findings, and the test
+file says so at the top of each block.
+
+## R1 (HIGH) — holiday superseding a failed live session — FIXED
+
+Reproduced exactly as described. `mark_holiday` now REFUSES any date carrying a
+live verdict, a signal alert or a fill alert, naming the evidence. And because
+a refusal at the CLI is not a control if the log can be edited, `streak()` no
+longer honours a holiday record for a date that has a live verdict at all — it
+reports it under `holiday_markers_ignored` instead.
+
+Verified both ways: a forged holiday record appended straight to the log does
+not clear the failure, and a genuine holiday with no pipeline traffic is still
+accepted.
+
+## R2 (HIGH) — re-audit rehabilitating a historical BREAK — FIXED
+
+`streak()` no longer builds on `read_sessions` (latest-wins). A date is broken
+if **any** live verdict for it was ever a break. A later CLEAN cannot un-break
+it, because the streak asserts the pipeline worked in realtime on the day, and
+re-running the audit after repairing the logs cannot make that true.
+
+The honest way out is `--reset-streak "<reason>"`, which restarts from zero and
+is itself written to the log. It can only ever discard progress, so there is no
+incentive to abuse it.
+
+`read_sessions` keeps latest-wins for DISPLAY — correcting a misdiagnosed
+session is legitimate and both records stay on the log — but it no longer feeds
+the gate.
+
+## R3 (HIGH) — fill-channel durability — FIXED
+
+Correct on every detail, including that `do_POST` would not have caught it:
+`record_fill` raised raw `OSError`, which bypassed the round-1 `NotDurable`
+handling entirely. The fill channel now gets the identical treatment: **append
+first, claim the id second**, `OSError` wrapped in `NotDurable`, and a 503 so
+TradingView is free to retry.
+
+Verified: after an injected `ENOSPC` the id is NOT claimed in memory, and the
+retry succeeds.
+
+## R4 (MEDIUM-HIGH) — fill freshness — FIXED
+
+`bar_time` is now required on fills and freshness-checked against the same
+15-minute tolerance as signals when running realtime. Phase 1 is a test of the
+*realtime* pipeline; a fill delivered hours later would have let an
+after-the-fact audit look complete when the realtime path had failed.
+
+## R5 (MEDIUM) — same id, different body — FIXED
+
+Both channels now store a body digest per `signal_id`. An identical repeat is a
+benign duplicate. A different body under the same id raises `CONFLICTING
+signal_id` — corruption, not a retry — and that reason is deliberately NOT on
+the audit's benign list, so it fails the session.
+
+## R6 (MEDIUM) — the reference tolerance — FIXED, and the shape was the point
+
+Independently measured on the 2,295-session export rather than taken on trust:
+
+| | |
+|---|---|
+| exactly equal | 90.2% |
+| within 0.50 pt | 96.0% |
+| within 1.00 pt | 97.8% |
+| within 2.00 pt | 98.5% |
+| median | 0.00 |
+
+The structural argument is right and is now in the code: **a constant
+continuous-contract offset shifts entry and exit by the same amount, so it
+cancels in net points.** The blanket 5.0 was wrong in shape, not just in size —
+and larger than the strategy's own 3.65-point expectancy, so a real divergence
+could hide inside it.
+
+`REF_NET_TOL = 2.0` on net points, where the offset cancels. The price *level*
+difference is now reported as `feed_offset_points`, a fact and never a failure,
+because failing it would mean failing a session for using TradingView's
+continuous contract — which is the entire point of Phase 1.
+
+The residual above 2 points is five sessions: 2020-11-27, 2021-11-26,
+2020-12-24, 2020-07-03, 2023-01-16 — all shortened sessions, all the known
+ETH-chart late exits, all removed by an RTH chart.
+
+## Clock skew (original #6) — verified to fail safe
+
+Not a false-clean path. Auditing the wrong date finds no heartbeat and BREAKS.
+Gated as R6 in the test file rather than argued.
+
+## Market-data plausibility — accepted, Phase 2
+
+Agreed and adopted, including the reasoning: a second TradingView-derived bar
+source is not independent, and the real broker's fill record is the actual
+independent truth once there is one. Recorded in
+`docs/DEPLOYMENT_ASSESSMENT.md` as a live-capital gate, not a Phase-1 blocker.
+
+## Still outstanding, and still the blocker
+
+The Pine has never been compiled. Placeholder semantics check out on paper for
+both of us; that is not the same as firing once in TradingView.

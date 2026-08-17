@@ -201,6 +201,12 @@ the same logic.
    `live_capital_gate_met: true`).
 2. Measured slippage ≤ **0.75 points per side**, the cost already in the
    reference.
+2b. **Fill-price plausibility against market data.** Every recorded fill must
+   fall inside the traded range of its bar. Deliberately NOT a Phase-1 gate:
+   in Phase 1 both signals and fills originate in TradingView, so a
+   TradingView-derived bar source would not be independent. Once a real broker
+   supplies its own fill record, that record is the independent truth and this
+   becomes mandatory.
 3. Account is **self-funded or has a non-trailing drawdown ≥ $10,000 per MNQ**.
    A trailing-drawdown prop account is disqualifying on the Task 3 evidence.
 4. Position sizing at or below **1 MNQ per $20,000** of risk capital.

@@ -20,6 +20,9 @@ import sys
 import tempfile
 import time
 import urllib.request
+from datetime import datetime, timezone
+
+NOW = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix="nq_audit_")
@@ -66,7 +69,7 @@ def fill(event, direction, price, pos_after, date=DATE, qty=1) -> dict:
             "event": event, "symbol": "NQ1!", "direction": direction,
             "fill_price": price, "fill_qty": qty, "position_after": pos_after,
             "order_comment": event, "stop": None, "session_date": date,
-            "bar_time": f"{date}T13:50:00Z",
+            "bar_time": NOW,
             "signal_id": f"fill|{date}|{event}"}
 
 
@@ -141,7 +144,7 @@ def main() -> int:
     check("a fill from another strategy is rejected",
           rejects({**bad, "strategy_version": "something_else"},
                   "unknown strategy"))
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
     PE.record_fill(fill("ORB_LONG_ENTRY", "LONG", 1.0, 1), seen)
     try:
         PE.record_fill(fill("ORB_LONG_ENTRY", "LONG", 1.0, 1), seen)
@@ -315,9 +318,10 @@ def main() -> int:
           not rep.clean and any("reference did" in n for n in names(rep)),
           ", ".join(names(rep)))
 
-    print("\nred-team partial-silence paths (ChatGPT brief, 1-8)")
-    # Each of these is a way for ONE stream to go quiet while the others look
-    # healthy. The heartbeat closed total silence; these are the partial cases.
+    print("\npartial-silence paths (S1-S8)")
+    # One stream goes quiet while the others look healthy. NOTE: these are NOT
+    # the round-1 red-team scenarios — conflating the two is how R1/R2/R5 below
+    # survived a whole review round. Those are gated separately.
 
     reset()   # 1. heartbeat and signal arrive, the fill never does
     feed([signal("ORB_LONG_ENTRY", "LONG", entry=23100.0, stop=23050.0),
@@ -325,7 +329,7 @@ def main() -> int:
                  exit=23180.0),
           signal("SESSION_SUMMARY", "LONG", traded=True)])
     rep = audit()
-    check("P1 signal and heartbeat arrive but no fill does",
+    check("S1 signal and heartbeat arrive but no fill does",
           not rep.clean and any("reached the emulator" in n for n in names(rep)),
           ", ".join(names(rep)))
 
@@ -334,7 +338,7 @@ def main() -> int:
     write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1),
                           fill("SESSION_CLOSE_EXIT", "LONG", 23180.0, 0)])
     rep = audit()
-    check("P2 fills arrive with no signal channel behind them",
+    check("S2 fills arrive with no signal channel behind them",
           not rep.clean and any("orphan" in n for n in names(rep)),
           ", ".join(names(rep)))
 
@@ -343,7 +347,7 @@ def main() -> int:
           signal("SESSION_SUMMARY", "LONG", traded=True)])
     write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)])
     rep = audit()
-    check("P3 a heartbeat does NOT imply the position was closed",
+    check("S3 a heartbeat does NOT imply the position was closed",
           not rep.clean and any("position was closed" in n for n in names(rep)),
           ", ".join(names(rep)))
 
@@ -357,7 +361,7 @@ def main() -> int:
     except PE.Rejected as e:
         stale_ok = "stale" in str(e)
     rep = audit()
-    check("P4 a stale heartbeat is refused and cannot rescue the session",
+    check("S4 a stale heartbeat is refused and cannot rescue the session",
           stale_ok and not rep.clean
           and any("reported in" in n for n in names(rep)))
 
@@ -367,7 +371,7 @@ def main() -> int:
         '"session_date": "2026-08-18"', '"session_date": "2026-08-17"', 1)
     open(os.path.join(TMP, "fills.jsonl"), "w").write(lines)
     a, b = audit("2026-08-18"), audit("2026-08-17")
-    check("P5 a misdated fill fails BOTH days, never silently one",
+    check("S5 a misdated fill fails BOTH days, never silently one",
           not a.clean and not b.clean,
           f"2026-08-18={names(a)}  2026-08-17={names(b)}")
 
@@ -375,7 +379,7 @@ def main() -> int:
     feed([signal("ORB_LONG_ENTRY", "LONG", entry=23100.0, stop=23050.0)])
     write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1)])
     rep = audit()
-    check("P6 an alert disabled mid-session loses the heartbeat and fails",
+    check("S6 an alert disabled mid-session loses the heartbeat and fails",
           not rep.clean and any("reported in" in n for n in names(rep)),
           "TradingView does not auto-re-enable, so no heartbeat at close "
           "means it was down at close")
@@ -385,9 +389,86 @@ def main() -> int:
     write("fills.jsonl", [fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1),
                           fill("ORB_STOP", "LONG", 23050.0, 0)])
     rep = audit()
-    check("P8 a traded=false heartbeat cannot outvote an observed fill",
+    check("S8 a traded=false heartbeat cannot outvote an observed fill",
           not rep.clean and any("heartbeat agrees" in n for n in names(rep)),
           ", ".join(names(rep)))
+
+    print("\nround-2 red-team: gate integrity (R1, R2, R5, R6)")
+    reset()
+    sl = os.path.join(TMP, "sessions.jsonl")
+
+    # R1 — a holiday marker must not be able to erase a failed live session
+    PE.append(sl, {"date": "2026-08-20", "mode": "live", "clean": False,
+                   "traded": True, "failures": ["the session's position was closed"]})
+    try:
+        DA.mark_holiday("2026-08-20"); refused = False
+    except SystemExit as e:
+        refused = "REFUSED" in str(e)
+    check("R1 a date with a live verdict cannot be marked a holiday", refused)
+    PE.append(sl, {"date": "2026-08-20", "mode": "holiday", "clean": True,
+                   "traded": False})
+    s2 = DA.streak(sl)
+    check("R1 even a forged holiday record does not clear the failure",
+          s2["sessions_with_failures"] == ["2026-08-20"]
+          and s2.get("holiday_markers_ignored") == ["2026-08-20"], json.dumps(s2))
+
+    # R1b — a genuine holiday, with no pipeline traffic at all, is still allowed
+    reset()
+    h = DA.mark_holiday("2026-11-26")
+    check("R1b a date with no verdict, signal or fill can still be a holiday",
+          h["mode"] == "holiday")
+    reset()
+    feed([signal("SESSION_SUMMARY", "NONE", "2026-11-26", traded=False)])
+    try:
+        DA.mark_holiday("2026-11-26"); refused = False
+    except SystemExit as e:
+        refused = "signal alert" in str(e)
+    check("R1c a date the strategy sent a heartbeat on is not a holiday", refused)
+
+    # R2 — a later CLEAN must not rehabilitate a historical BREAK
+    reset()
+    PE.append(sl, {"date": "2026-08-19", "mode": "live", "clean": True,
+                   "traded": True})
+    PE.append(sl, {"date": "2026-08-20", "mode": "live", "clean": False,
+                   "traded": True, "failures": ["fill missing"]})
+    PE.append(sl, {"date": "2026-08-20", "mode": "live", "clean": True,
+                   "traded": True, "failures": []})
+    s2 = DA.streak(sl)
+    check("R2 re-auditing a failed session cannot un-break it",
+          s2["consecutive_clean"] == 0
+          and s2["sessions_with_failures"] == ["2026-08-20"], json.dumps(s2))
+    r = DA.reset_streak("logs rebuilt after disk failure")
+    check("R2b an explicit reset is the only way out, and starts at zero",
+          r["mode"] == "reset" and DA.streak(sl)["consecutive_clean"] == 0
+          and DA.streak(sl)["streak_reset_at"] is not None)
+
+    # R5 — a conflicting body must not hide behind the idempotency gate
+    seen2: dict[str, str] = {}
+    PE.record_fill(fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1), seen2)
+    try:
+        PE.record_fill(fill("ORB_LONG_ENTRY", "LONG", 23100.0, 1), seen2)
+        benign = False
+    except PE.Rejected as e:
+        benign = str(e).startswith("duplicate")
+    check("R5 an identical retry is a benign duplicate", benign)
+    try:
+        PE.record_fill(fill("ORB_LONG_ENTRY", "LONG", 23999.0, 1), seen2)
+        conflict = False
+    except PE.Rejected as e:
+        conflict = "CONFLICTING" in str(e)
+    check("R5 the same id with a different body is corruption, not a retry",
+          conflict)
+    check("R5 and a conflict is NOT on the benign list the audit forgives",
+          not any(b in "CONFLICTING fill signal_id x: same id, different body"
+                  for b in DA.BENIGN_REJECTIONS))
+
+    # R6 — clock skew must fail safe, never produce a false clean
+    reset()
+    clean_session(date=DATE)
+    skewed = audit("2026-08-19")          # as if the box's clock were 2 days out
+    check("R6 auditing the wrong date under clock skew fails, never passes",
+          not skewed.clean and any("reported in" in n for n in names(skewed)),
+          ", ".join(names(skewed)))
 
     print("\nStrategy Tester export cross-check")
     reset()

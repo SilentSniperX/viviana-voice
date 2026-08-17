@@ -87,7 +87,7 @@ def main(argv: list[str]) -> int:
           f"({trades[0]['date']} -> {trades[-1]['date']})\n")
 
     led = PE.Ledger()
-    fills_seen: set[str] = set()
+    fills_seen: dict[str, str] = {}
     verdicts: list[dict] = []
     reasons: Counter = Counter()
     rejected = 0

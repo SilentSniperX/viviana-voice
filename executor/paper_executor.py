@@ -27,6 +27,7 @@ Self-test the gates:   python3 executor/paper_executor.py selftest
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -75,6 +76,19 @@ COST_POINTS = 0.75
 # Kill switch. Touch this file and the receiver accepts no new ENTRIES; exits
 # are still honoured so an open position can always be closed.
 KILL_FILE = os.path.join(STATE_DIR, "KILL")
+
+
+def body_digest(payload: dict) -> str:
+    """Stable hash of a payload body.
+
+    A genuine TradingView retry re-sends the IDENTICAL body. The same
+    `signal_id` carrying a different price, side, quantity or session is not a
+    retry — it is corruption, and treating it as a routine duplicate would let a
+    real fault hide behind the idempotency gate.
+    """
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
 
 
 class Rejected(Exception):
@@ -192,10 +206,11 @@ def validate(payload: dict, schema: dict, *, now: datetime | None = None,
 
 FILL_REQUIRED = ("strategy_version", "channel", "event", "symbol", "direction",
                  "fill_price", "fill_qty", "position_after", "signal_id",
-                 "session_date")
+                 "session_date", "bar_time")
 
 
-def validate_fill(payload: dict) -> None:
+def validate_fill(payload: dict, *, now: datetime | None = None,
+                  enforce_freshness: bool = False) -> None:
     """Gate a TradingView 'Order fills only' payload.
 
     This is an OBSERVATION, not an instruction: it is recorded and reconciled,
@@ -230,16 +245,42 @@ def validate_fill(payload: dict) -> None:
         if isinstance(val, str) and "{{" in val:
             raise Rejected(f"fill field {key!r} still contains an unexpanded "
                            f"TradingView placeholder: {val!r}")
+    # Fills carry {{timenow}} — the alert FIRE time — and are held to the same
+    # freshness rule as signals. Phase 1 is a test of the REALTIME pipeline; a
+    # fill delivered hours late would otherwise make an after-the-fact audit
+    # look complete when the realtime path had in fact failed.
+    if enforce_freshness:
+        ts = parse_event_time(payload["bar_time"])
+        now = now or datetime.now(timezone.utc)
+        if ts is None:
+            raise Rejected(f"unparsable fill bar_time {payload['bar_time']!r}")
+        if abs(now - ts) > STALE_TOLERANCE:
+            raise Rejected(f"stale fill bar_time {payload['bar_time']}")
 
 
-def record_fill(payload: dict, seen: set[str] | None = None) -> dict:
-    validate_fill(payload)
+def record_fill(payload: dict, seen: dict[str, str] | None = None, *,
+                now: datetime | None = None,
+                enforce_freshness: bool = False) -> dict:
+    validate_fill(payload, now=now, enforce_freshness=enforce_freshness)
     sid = payload["signal_id"]
-    if seen is not None:
-        if sid in seen:
+    digest = body_digest(payload)
+    if seen is not None and sid in seen:
+        if seen[sid] == digest:
             raise Rejected(f"duplicate fill signal_id {sid}")
-        seen.add(sid)
-    append(FILL_LOG, {"received": utcnow(), "payload": payload})
+        raise Rejected(f"CONFLICTING fill signal_id {sid}: same id, different "
+                       f"body (first {seen[sid]}, now {digest}) — this is "
+                       f"corruption, not a retry")
+    # DURABLE FIRST. The signal channel learned this the hard way: marking an id
+    # seen before the append means a failed write leaves the id claimed in
+    # memory, so TradingView's legitimate retry is refused as a duplicate and
+    # the fill is lost until a restart.
+    try:
+        append(FILL_LOG, {"received": utcnow(), "payload": payload})
+    except OSError as exc:
+        raise NotDurable(f"could not commit fill {sid} to the fill log: "
+                         f"{exc}") from exc
+    if seen is not None:
+        seen[sid] = digest
     return {"action": "fill_recorded", "event": payload["event"],
             "fill_price": payload["fill_price"],
             "position_after": payload["position_after"]}
@@ -288,7 +329,7 @@ class Ledger:
 
     def __init__(self, broker: BrokerAdapter | None = None):
         self.broker = broker or PaperBroker()
-        self.seen: set[str] = set()
+        self.seen: dict[str, str] = {}
         self.position: dict | None = None
         self.closed: list[dict] = []
         self.rejections: list[dict] = []
@@ -332,8 +373,13 @@ class Ledger:
         validate(payload, schema, now=now, enforce_freshness=enforce_freshness)
 
         sid = payload["signal_id"]
+        digest = body_digest(payload)
         if sid in self.seen:
-            raise Rejected(f"duplicate signal_id {sid}")
+            if self.seen[sid] == digest:
+                raise Rejected(f"duplicate signal_id {sid}")
+            raise Rejected(f"CONFLICTING signal_id {sid}: same id, different "
+                           f"body (first {self.seen[sid]}, now {digest}) — this "
+                           f"is corruption, not a retry")
 
         # Everything below MUTATES. If the append-only log cannot then be
         # written — a full disk is the realistic case — this snapshot is what
@@ -341,7 +387,7 @@ class Ledger:
         # holding a position that no durable record contains, and a restart
         # silently flattens it.
         undo = (self.position, list(self.closed), set(self.sessions_traded),
-                set(self.seen), self.resting_stop)
+                dict(self.seen), self.resting_stop)
 
         event = payload["event"]
         result: dict
@@ -420,7 +466,7 @@ class Ledger:
                       "gross_points": rec["gross_points"], "points": rec["points"],
                       "dollars": rec["dollars"]}
 
-        self.seen.add(sid)
+        self.seen[sid] = digest
         if persist:
             try:
                 # The EVENT log is the one that must survive: `rebuild` replays
@@ -514,7 +560,8 @@ def append(path: str, rec: dict) -> None:
 def make_handler(ledger: Ledger):
     # Fill ids already recorded, so a re-fired fill alert is rejected rather than
     # double-counted. Seeded from the log so a restart does not forget.
-    fills_seen = {p["signal_id"] for p in load_fills() if p.get("signal_id")}
+    fills_seen = {p["signal_id"]: body_digest(p)
+                  for p in load_fills() if p.get("signal_id")}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -534,7 +581,8 @@ def make_handler(ledger: Ledger):
                     # TradingView's own fill report. Recorded for the daily
                     # audit; it must not move the ledger, or the audit would be
                     # comparing the ledger against itself.
-                    result = record_fill(payload, fills_seen)
+                    result = record_fill(payload, fills_seen,
+                                         enforce_freshness=True)
                 else:
                     result = ledger.apply(payload, enforce_freshness=True)
             except Rejected as exc:
