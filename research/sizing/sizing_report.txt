@@ -1,0 +1,97 @@
+==============================================================================
+SIZING BY OPENING-RANGE GEOMETRY — diagnosis, signal untouched
+==============================================================================
+trades 2295   2016-01-04 .. 2026-06-30
+same entries, same stops, same exits. only contract count varies.
+
+------------------------------------------------------------------------------
+Q1  DOES THE GEOMETRY VARY ENOUGH TO MATTER?
+------------------------------------------------------------------------------
+  risk = |entry - stop|, in points
+    min   2.75   p10   17.0   median   65.0   p90  150.8   max   771.2
+    p90 / p10 = 8.9x
+    median risk 2016: 18.8 pts  ->  2026: 159.4 pts  (8.5x)
+
+  CONSEQUENCE: under fixed-contract sizing the DOLLAR RISK PER TRADE
+  grew ~8x across the sample. The 10-year point total is therefore
+  dominated by recent years mechanically, not by better trading.
+
+------------------------------------------------------------------------------
+Q2  IS EXPECTANCY-IN-R FLAT ACROSS RISK GEOMETRY?
+------------------------------------------------------------------------------
+  If flat, constant risk IS the answer and nothing cleverer can add.
+  Normalised causally: each trade's risk / median risk of the prior
+  50 trades. No future information.
+  usable trades: 2245 (first 50 have no baseline)
+
+  bucket           n   rel risk     exp R    exp pts   PF(R)   stop%
+  Q1 tightest    450       0.61    +0.028      +0.96    1.05   53.6%
+  Q2             449       0.81    +0.019      +4.39    1.04   48.6%
+  Q3             449       1.01    +0.156     +13.22    1.36   38.3%
+  Q4             449       1.27    +0.065      +3.28    1.15   37.9%
+  Q5 widest      448       1.78    +0.018      -2.65    1.04   35.9%
+
+  Spearman(relative risk, netR) = +0.1531
+  tightest vs widest quintile expectancy: +0.028R vs +0.018R   permutation p = 0.9106
+
+  WALK-FORWARD on the obvious rule 'skip the worst quintile':
+  fit the worst bucket on trades so far, apply it to the next 250.
+    fit<2018-08-08  skip Q2           all -0.025R -> filtered -0.007R  (+0.017)
+    fit<2019-10-08  skip Q2           all +0.015R -> filtered -0.037R  (-0.052)
+    fit<2020-12-07  skip Q2           all +0.100R -> filtered +0.018R  (-0.081)
+    fit<2022-01-18  skip Q1 tightest  all +0.081R -> filtered +0.129R  (+0.049)
+    fit<2023-02-23  skip Q1 tightest  all +0.119R -> filtered +0.069R  (-0.050)
+    fit<2024-05-02  skip Q2           all +0.126R -> filtered +0.124R  (-0.002)
+    improved in 2/6 out-of-sample windows, mean delta -0.0200R
+
+------------------------------------------------------------------------------
+Q3  FIXED CONTRACT vs CONSTANT RISK, ON A DRAWDOWN BUDGET
+------------------------------------------------------------------------------
+  FIXED CONTRACT (1 NQ)     total    +8367.8 pts   maxDD   2539.0 pts   return/DD  3.30
+  CONSTANT RISK (1R/trade)  total     +122.8 R     maxDD     25.6 R     return/DD  4.79
+
+  ratio of return/DD: 1.45x in favour of CONSTANT RISK
+
+  Same comparison per era (return/DD is scale-free):
+  era            fixed ret/DD   const-risk ret/DD
+  2016-2020             -0.44                0.59
+  2021-2023              3.25                5.37
+  2024-2026              1.54                2.66
+
+  PRACTICAL: $25,000 account, MNQ ($2/pt), integer contracts.
+    risk 0.50%/trade  total $  +17,050  maxDD $   4,948  ret/DD  3.45  median size 1  forced-to-1 on 52% of trades
+    risk 0.75%/trade  total $  +18,945  maxDD $   4,849  ret/DD  3.91  median size 1  forced-to-1 on 31% of trades
+    risk 1.00%/trade  total $  +20,018  maxDD $   6,988  ret/DD  2.86  median size 1  forced-to-1 on 17% of trades
+    FIXED 1 MNQ           total $  +16,736  maxDD $   5,078  ret/DD  3.30
+
+  At what account size does the advantage become REAL?
+  (integer contracts are what destroys it on a small account)
+     account  contract  median size  forced-to-1   ret/DD  vs fixed
+      25,000       MNQ            1          31%     3.95     1.20x
+      50,000       MNQ            2           5%     3.18     0.96x
+     100,000       MNQ            5           0%     4.22     1.28x
+     250,000       MNQ           14           0%     4.49     1.36x
+     250,000        NQ            1          31%     3.95     1.20x
+   1,000,000        NQ            5           0%     4.22     1.28x
+  continuous (fractional contracts, unreachable in practice): 1.45x
+
+------------------------------------------------------------------------------
+WHY THE BUCKET STRUCTURE IS NOT A SIGNAL
+------------------------------------------------------------------------------
+  A wider stop is further away, so it is hit less often — but the
+  wins it produces are proportionally smaller. The two effects
+  cancel, which is exactly what 'R already accounts for geometry'
+  means. The numbers:
+  bucket        stop rate   avg win R  avg loss R    exp R
+  Q1 tightest       53.6%       1.628      -0.934   +0.028
+  Q2                48.6%       1.298      -0.919   +0.019
+  Q3                38.3%       1.238      -0.822   +0.156
+  Q4                37.9%       1.087      -0.832   +0.065
+  Q5 widest         35.9%       0.915      -0.801   +0.018
+
+  Stop rate falls monotonically from tightest to widest, as geometry
+  alone predicts. Expectancy does NOT — it is an inverted U with the
+  middle bucket best, a shape with no mechanism behind it, and the
+  walk-forward above shows it does not survive out of sample.
+
+==============================================================================
