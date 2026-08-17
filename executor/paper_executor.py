@@ -46,6 +46,23 @@ ALL_EVENTS = ENTRY_EVENTS | EXIT_EVENTS | STATE_EVENTS
 
 STALE_TOLERANCE = timedelta(minutes=15)
 
+# Position sizing. The deployment assessment puts the defensible self-funded
+# envelope at roughly $20,000-25,000 per MNQ, so the default is the smallest
+# tradeable size on the smallest contract. Raising either of these is a capital
+# decision, not a code decision.
+CONTRACT = os.environ.get("NQ_PAPER_CONTRACT", "MNQ")     # MNQ ($2/pt) or NQ ($20/pt)
+QTY = int(os.environ.get("NQ_PAPER_QTY", "1"))
+POINT_VALUE = {"MNQ": 2.0, "NQ": 20.0}
+# The reference subtracts a 0.75-point round-turn cost. The paper ledger uses the
+# same convention so daily reconciliation compares like with like — otherwise
+# every trade shows a constant 0.75-point difference and operators learn to
+# ignore the column that is supposed to surface real breaks.
+COST_POINTS = 0.75
+
+# Kill switch. Touch this file and the receiver accepts no new ENTRIES; exits
+# are still honoured so an open position can always be closed.
+KILL_FILE = os.path.join(STATE_DIR, "KILL")
+
 
 class Rejected(Exception):
     """A payload that must not reach the ledger. The reason is always logged."""
@@ -61,6 +78,12 @@ class BrokerAdapter:
     def submit_market_order(self, side: str, qty: int, price: float) -> dict:
         raise NotImplementedError
 
+    def submit_stop_order(self, side: str, qty: int, stop: float) -> dict:
+        raise NotImplementedError
+
+    def cancel_order(self, order_id: str) -> dict:
+        raise NotImplementedError
+
     def flatten_position(self, price: float) -> dict:
         raise NotImplementedError
 
@@ -72,10 +95,20 @@ class PaperBroker(BrokerAdapter):
     """Fills at the price carried in the alert. No transport, no credentials."""
 
     live = False
+    _seq = 0
 
     def submit_market_order(self, side, qty, price):
         return {"filled": True, "side": side, "qty": qty, "price": price,
                 "venue": "PAPER"}
+
+    def submit_stop_order(self, side, qty, stop):
+        self._seq += 1
+        return {"order_id": f"PAPER-STOP-{self._seq}", "resting": True,
+                "side": "SELL" if side == "LONG" else "BUY", "qty": qty,
+                "stop": stop, "venue": "PAPER"}
+
+    def cancel_order(self, order_id):
+        return {"cancelled": order_id, "venue": "PAPER"}
 
     def flatten_position(self, price):
         return {"filled": True, "price": price, "venue": "PAPER"}
@@ -155,6 +188,8 @@ class Ledger:
         self.closed: list[dict] = []
         self.rejections: list[dict] = []
         self.skipped = 0          # unusable log lines seen during recovery
+        self.sessions_traded: set[str] = set()   # frozen spec B: one trade/day
+        self.resting_stop: dict | None = None
 
     # -- restart recovery ---------------------------------------------------
     @classmethod
@@ -202,8 +237,17 @@ class Ledger:
             result = {"action": "state_recorded", "s5b_state": payload["s5b_state"]}
 
         elif event in ENTRY_EVENTS:
+            if kill_engaged():
+                raise Rejected("kill switch engaged — new entries refused")
             if self.position is not None:
                 raise Rejected("an entry arrived while a position was already open")
+            # Frozen spec B: ONE TRADE PER DAY. The Pine enforces this too, but a
+            # duplicated or replayed alert must not be able to re-arm the day, so
+            # the executor refuses independently rather than trusting the source.
+            session = payload.get("session_date") or payload["event_time"][:10]
+            if session in self.sessions_traded:
+                raise Rejected(f"session {session} has already traded "
+                               f"(frozen spec B: one trade per day)")
             side = "LONG" if event == "ORB_LONG_ENTRY" else "SHORT"
             if payload.get("direction") != side:
                 raise Rejected(f"direction {payload.get('direction')!r} contradicts "
@@ -211,12 +255,21 @@ class Ledger:
             entry = payload.get("entry")
             if entry is None:
                 raise Rejected("entry event carries no entry price")
-            fill = self.broker.submit_market_order(side, 1, float(entry))
-            self.position = {"side": side, "entry": float(entry),
-                             "stop": payload.get("stop"),
+            stop = payload.get("stop")
+            if stop is None:
+                raise Rejected("entry event carries no stop price — refusing an "
+                               "unprotected position")
+            fill = self.broker.submit_market_order(side, QTY, float(entry))
+            # The protective stop goes on immediately, in the same handler, so a
+            # position can never exist without one even if the process dies here.
+            self.resting_stop = self.broker.submit_stop_order(side, QTY, float(stop))
+            self.position = {"side": side, "entry": float(entry), "stop": float(stop),
+                             "qty": QTY, "contract": CONTRACT,
                              "opened": payload["event_time"],
-                             "signal_id": sid, "session": payload.get("session_date")}
-            result = {"action": "opened", "fill": fill}
+                             "signal_id": sid, "session": session}
+            self.sessions_traded.add(session)
+            result = {"action": "opened", "fill": fill,
+                      "protective_stop": self.resting_stop}
 
         else:                                            # EXIT_EVENTS
             if self.position is None:
@@ -224,13 +277,22 @@ class Ledger:
             px = payload.get("stop") if event == "ORB_STOP" else payload.get("entry")
             px = float(px) if px is not None else self.position["entry"]
             fill = self.broker.flatten_position(px)
+            if self.resting_stop is not None:
+                self.broker.cancel_order(self.resting_stop["order_id"])
+                self.resting_stop = None
             pos = self.position
-            pts = (px - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
+            gross = (px - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
+            pts = gross - COST_POINTS
+            pv = POINT_VALUE[pos.get("contract", CONTRACT)]
             rec = {**pos, "exit": px, "exit_event": event,
-                   "closed": payload["event_time"], "points": round(pts, 2)}
+                   "closed": payload["event_time"],
+                   "gross_points": round(gross, 2), "points": round(pts, 2),
+                   "dollars": round(pts * pv * pos.get("qty", QTY), 2)}
             self.closed.append(rec)
             self.position = None                          # can only flatten
-            result = {"action": "closed", "fill": fill, "points": rec["points"]}
+            result = {"action": "closed", "fill": fill,
+                      "gross_points": rec["gross_points"], "points": rec["points"],
+                      "dollars": rec["dollars"]}
 
         self.seen.add(sid)
         if persist:
@@ -241,7 +303,16 @@ class Ledger:
     def snapshot(self) -> dict:
         return {"open_position": self.position, "closed_trades": len(self.closed),
                 "net_points": round(sum(c["points"] for c in self.closed), 2),
-                "signals_seen": len(self.seen), "unusable_log_lines": self.skipped}
+                "net_dollars": round(sum(c.get("dollars", 0) for c in self.closed), 2),
+                "signals_seen": len(self.seen), "unusable_log_lines": self.skipped,
+                "sessions_traded": len(self.sessions_traded),
+                "protective_stop": self.resting_stop,
+                "kill_switch": kill_engaged(),
+                "contract": CONTRACT, "qty": QTY}
+
+
+def kill_engaged() -> bool:
+    return os.path.exists(KILL_FILE)
 
 
 def utcnow() -> str:
@@ -421,6 +492,52 @@ def selftest() -> int:
             ok = True
         check("idempotency survives a restart", ok)
         EVENT_LOG, LEDGER_LOG = keep
+
+    # one trade per day, enforced independently of the signal source
+    led3 = Ledger()
+    led3.apply(entry("d1"), persist=False)
+    led3.apply({**base, "signal_id": "d2", "event": "ORB_STOP", "direction": "LONG",
+                "entry": 100.0, "stop": 90.0}, persist=False)
+    try:
+        led3.apply(entry("d3"), persist=False); ok = False
+    except Rejected as e:
+        ok = "already traded" in str(e)
+    check("a second entry in the same session is refused", ok)
+    led3.apply({**entry("d4"), "session_date": "2026-08-18"}, persist=False)
+    check("a new session re-arms", led3.position is not None)
+
+    led4 = Ledger()
+    led4.apply(entry("p1"), persist=False)
+    check("protective stop is resting immediately after entry",
+          led4.resting_stop is not None and led4.resting_stop["stop"] == 90.0,
+          str(led4.resting_stop))
+    try:
+        led4.apply({**base, "signal_id": "p2", "event": "ORB_SHORT_ENTRY",
+                    "direction": "SHORT", "entry": 100.0}, persist=False); ok = False
+    except Rejected:
+        ok = True
+    check("entry without a stop price is refused", ok)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        global KILL_FILE
+        keep_kill = KILL_FILE
+        KILL_FILE = os.path.join(tmp, "KILL")
+        led5 = Ledger()
+        open(KILL_FILE, "w").close()
+        try:
+            led5.apply(entry("k9"), persist=False); ok = False
+        except Rejected as e:
+            ok = "kill switch" in str(e)
+        check("kill switch refuses new entries", ok)
+        os.remove(KILL_FILE)
+        led5.apply(entry("k10"), persist=False)
+        led5_pos = led5.position is not None
+        open(KILL_FILE, "w").close()
+        led5.apply({**base, "signal_id": "k11", "event": "SESSION_CLOSE_EXIT",
+                    "direction": "LONG", "entry": 101.0, "stop": 90.0}, persist=False)
+        check("kill switch still allows an open position to be closed",
+              led5_pos and led5.position is None)
+        KILL_FILE = keep_kill
 
     with tempfile.TemporaryDirectory() as tmp:
         bad = os.path.join(tmp, "corrupt.jsonl")
