@@ -582,6 +582,15 @@ if showConviction and (evtS5bLong or evtS5bShort)
 // outside 09:30-16:00 and produced a permanent false-positive CONFIG ERROR on
 // ordinary NQ1! charts.
 wrongTimeframe = timeframe.period != "5"
+// Measured on a 2,295-session export: on an EXTENDED-HOURS chart a shortened
+// session has no 15:55 bar, so the clock trigger falls through to the 18:00
+// Globex reopen and the trade exits ~5 hours late. 30 of 48 shortened sessions
+// failed this way; `session.islastbar_regular` caught only 18. An RTH-only
+// chart has no post-session bars and resolves all of them. This counts the
+// occurrences so the condition is visible instead of silent.
+var int cLateClose = 0
+if exitReason == "SESSION_CLOSE_EXIT" and exitTs == time and nyMinute >= 960
+    cLateClose += 1
 if wrongTimeframe and barstate.islast
     label.new(bar_index, high,
               "CONFIG ERROR\ntimeframe is " + timeframe.period + ", must be 5\n" +
@@ -627,7 +636,9 @@ if barstate.islast
     table.cell(dbg, 0, 7, "stop exits",  text_color = color.gray,  text_size = size.small)
     table.cell(dbg, 1, 7, str.tostring(cStopped),   text_color = color.white, text_size = size.small)
     table.cell(dbg, 0, 8, "close exits", text_color = color.gray,  text_size = size.small)
-    table.cell(dbg, 1, 8, str.tostring(cClosed),    text_color = color.white, text_size = size.small)
+    table.cell(dbg, 1, 8, str.tostring(cClosed) +
+               (cLateClose > 0 ? "  (" + str.tostring(cLateClose) + " LATE - use an RTH chart)" : ""),
+               text_color = cLateClose > 0 ? color.orange : color.white, text_size = size.small)
 
 if showLabels and barstate.islast
     table.cell(hud, 0, 0, "ORB",        text_color = color.gray,  text_size = size.small)

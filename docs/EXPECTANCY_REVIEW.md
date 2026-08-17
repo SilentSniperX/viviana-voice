@@ -28,7 +28,43 @@ way.** Reproduce everything here with `python3 tests/expectancy_check.py`
 
 ---
 
-## Parity result — the trade lists settle it
+## FINAL PARITY RESULT — full 2016-2026 export
+
+A second `NQ1!` export covering **2,323 trades back to 2016-01-04** was graded
+against the entire 2016+ reference. **2,295 sessions, 100% coverage, 0 canonical
+trades missing, 0 extra.**
+
+| check | result |
+|---|---|
+| direction | **2,295 / 2,295** |
+| entry bar | **2,292 / 2,295** (99.87%) |
+| exit reason | 2,292 / 2,295 |
+| exit bar | 2,265 / 2,295 |
+
+Residuals, both bounded and explained:
+
+- **3 entry differences** (2018-06-12, 2024-07-03, 2024-09-16) — marginal
+  qualification calls on a different price series. Taxonomy class 1.
+- **30 exit-bar differences — every one a shortened session.** On an
+  extended-hours chart an early-close day has no 15:55 bar, so the clock trigger
+  falls through to the 18:00 Globex reopen. Of 48 shortened sessions, 18
+  resolved correctly and 30 did not. **An RTH-only chart has no post-session
+  bars and fixes all 30.**
+
+### And the P&L, over the full decade
+
+| | net points | net $ (1 NQ contract) |
+|---|---|---|
+| TradingView NQ1! | **+9,926.5** | **+$198,530** |
+| Reference | **+8,367.8** | **+$167,355** |
+
+Both strongly positive across 2,295 trades. The +18.6% gap is the 30 late
+half-day exits plus the 3 entry differences. **The 65-trade sample that prompted
+the kill recommendation is a drawdown inside this record**, which TradingView
+independently reproduces.
+
+## Earlier parity result — the first 65-trade export
+
 
 `NQ1!` export, 65 trades, 2026-05-04 to 2026-08-14. The reference data ends
 2026-06-30, so **37 sessions are verifiable**:
