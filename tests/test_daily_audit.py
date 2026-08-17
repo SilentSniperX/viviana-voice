@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -48,12 +49,18 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         FAILURES.append(name)
 
 
-def reset() -> None:
+def reset(pin: bool = True) -> None:
     for f in ("events.jsonl", "fills.jsonl", "ledger.jsonl", "rejected.jsonl",
-              "sessions.jsonl"):
+              "sessions.jsonl", "chart_pin.json"):
         p = os.path.join(TMP, f)
         if os.path.exists(p):
             os.remove(p)
+    if pin:
+        # The pin is a deliberate operator act; every gate that is not ABOUT
+        # pinning assumes it has been done.
+        json.dump({"tickerid": "CME_MINI:NQ1!", "session_type": "regular",
+                   "timeframe": "5", "chart_standard": True,
+                   "pinned_from": "setup"}, open(DA.CHART_PIN, "w"))
 
 
 def signal(event, direction, date=DATE, **kw) -> dict:
@@ -63,7 +70,10 @@ def signal(event, direction, date=DATE, **kw) -> dict:
          "direction": direction, "orb_direction": direction,
          "s5b_state": "WAITING_FOR_LATCH", "alignment": "UNRESOLVED"}
     if event == "SESSION_SUMMARY":
-        p.update({"timeframe": "5", "eth_bars": 0, "chart_config_ok": True})
+        p.update({"timeframe": "5", "eth_bars": 0, "chart_standard": True,
+                  "session_type": "regular", "tickerid": "CME_MINI:NQ1!",
+                  "intrabar_calcs": 0, "initial_capital": 1000000.0,
+                  "chart_config_ok": True})
     p.update(kw)
     return p
 
@@ -575,6 +585,81 @@ def main() -> int:
     r2 = DA.Report("x")
     r2.check("optional diagnostic", None, required=False)
     check("an optional N/A does not", r2.clean)
+
+    print("\nround-4 red-team: chart identity (R10-R13)")
+
+    def with_hb(**over):
+        """A clean session whose heartbeat carries a doctored chart identity."""
+        reset()
+        clean_session()
+        txt = open(os.path.join(TMP, "events.jsonl")).read()
+        for k, v in over.items():
+            txt = re.sub(rf'"{k}": [^,}}]+', f'"{k}": {json.dumps(v)}', txt)
+        open(os.path.join(TMP, "events.jsonl"), "w").write(txt)
+        return audit()
+
+    # R10 — synthetic OHLC from a non-standard chart type
+    rep = with_hb(chart_standard=False)
+    check("R10 a Heikin-Ashi / Renko / Range chart fails",
+          not rep.clean and any("standard candlestick" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    check("R10 and the reason names synthetic OHLC",
+          any("SYNTHETIC OHLC" in c["detail"] for c in rep.failures))
+
+    # R11 — declared session identity, not inferred from absent bars
+    rep = with_hb(session_type="extended")
+    check("R11 a chart declaring the extended session fails",
+          not rep.clean and any("expected session" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    rep = with_hb(session_type="extended", eth_bars=0)
+    check("R11 and it fails even with ZERO overnight bars seen",
+          not rep.clean and any("expected session" in n for n in names(rep)),
+          "absence of ETH bars is not evidence of a regular-session chart")
+
+    # R12 — ticker construction, pinned
+    rep = with_hb(tickerid="CME_MINI:NQ1!_UNADJUSTED")
+    check("R12 a changed ticker construction fails against the pin",
+          not rep.clean and any("matches the pin" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    reset(pin=False)
+    clean_session()
+    rep = audit()
+    check("R12 an UNPINNED chart is not clean",
+          not rep.clean and any("is pinned" in n for n in names(rep)),
+          "the audit cannot tell back-adjusted from unadjusted, and forward "
+          "sessions have no reference to catch it")
+    check("R12 and the failure tells the operator exactly what to do",
+          any("--pin-chart" in c["detail"] for c in rep.failures))
+    pin = DA.pin_chart(DATE)
+    check("R12 pinning records the construction the session reported",
+          pin["tickerid"] == "CME_MINI:NQ1!" and pin["pinned_from"] == DATE,
+          json.dumps(pin))
+    check("R12 and the session is clean once pinned", audit().clean)
+    try:
+        reset(pin=False); DA.pin_chart(DATE); pinned_nothing = False
+    except SystemExit as e:
+        pinned_nothing = "nothing to pin" in str(e)
+    check("R12 pinning refuses when there is no heartbeat to pin from",
+          pinned_nothing)
+
+    # R13 — Strategy Properties are snapshot with the alert; BUILD_ID is not enough
+    rep = with_hb(intrabar_calcs=417)
+    check("R13 a calc_on_every_tick override fails",
+          not rep.clean and any("calc_on_every_tick" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    rep = with_hb(initial_capital=25000.0)
+    check("R13 an initial-capital override fails",
+          not rep.clean and any("initial capital" in n for n in names(rep)),
+          ", ".join(names(rep)))
+    reset()
+    clean_session()
+    txt = open(os.path.join(TMP, "events.jsonl")).read()
+    txt = re.sub(r'"(chart_standard|session_type|tickerid|intrabar_calcs|'
+                 r'initial_capital)": [^,}]+, ', "", txt)
+    open(os.path.join(TMP, "events.jsonl"), "w").write(txt)
+    rep = audit()
+    check("R13 a heartbeat that omits the chart identity is not clean",
+          not rep.clean, ", ".join(names(rep))[:120])
 
     print("\nStrategy Tester export cross-check")
     reset()

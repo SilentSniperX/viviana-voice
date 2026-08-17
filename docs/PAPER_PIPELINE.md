@@ -186,6 +186,8 @@ What it checks:
 | stop discipline | a stop may fill worse than its trigger, never better |
 | ledger | one closed trade, prices agreeing with the emulator's fills, executor flat |
 | **the heartbeat** | exactly one `SESSION_SUMMARY`, agreeing on whether the session traded — no heartbeat is a failure, never a quiet day |
+| **chart identity** | symbol, Pine `build_id`, 5-minute timeframe, standard candlestick chart, declared `regular` session, zero overnight bars, and a ticker construction matching the pin |
+| **strategy properties** | zero intrabar calculations and the declared initial capital — TradingView snapshots settings into an alert alongside the script, and `build_id` covers only the script |
 | rejections | anything beyond a routine duplicate alert fails the session |
 | reference | inside the canonical window: traded exactly when the reference did, same direction, net points within the known price-series tolerance |
 | export | with `--tv-export`: one trade for the date, direction and both prices agreeing with the fill alerts |
@@ -218,6 +220,26 @@ python3 executor/daily_audit.py --mark-holiday 2026-11-26
 ```
 
 Holiday and replay verdicts are excluded from the streak in both directions.
+
+### Pin the chart before the count starts
+
+```bash
+python3 executor/daily_audit.py --pin-chart 2026-08-17
+```
+
+`build_id` proves which script ran. It cannot prove which price *construction*
+the chart was built on — a back-adjusted continuous NQ1! and an unadjusted one
+both report symbol `NQ1!`, 5m, RTH and the same build, and forward of the
+canonical window there is no reference to catch the difference.
+
+So the chart's ticker id is **pinned**: confirm once that the chart is the
+intended back-adjusted standard RTH series, pin what it reported, and any later
+change breaks the audit. **An unpinned chart is never clean** — the audit says
+so and names this command.
+
+The pin proves the construction has not changed since a session you confirmed.
+It does not prove the construction you pinned was the right one. That check is
+yours, once, at the chart.
 
 ## 6. The streak that gates deployment
 

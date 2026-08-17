@@ -74,6 +74,17 @@ REF_NET_TOL = 2.0
 # fact, never failed: failing it would be failing the session for using
 # TradingView's continuous contract, which is the whole point of Phase 1.
 
+# The chart's declared session identity. Asserted by the chart, not inferred
+# from the absence of overnight bars.
+EXPECTED_SESSION = os.environ.get("NQ_PAPER_SESSION", "regular")
+EXPECTED_CAPITAL = 1000000.0
+# `tickerid` carries the ticker construction, including — possibly — the
+# continuous-contract back-adjustment state. What it contains for a
+# back-adjusted NQ1! chart is NOT verified, so it cannot be hard-coded here.
+# It is PINNED instead: the operator confirms the chart once, pins what it
+# reported, and any later change to the construction breaks the audit.
+CHART_PIN = os.path.join(STATE_DIR, "chart_pin.json")
+
 VALIDATE_SESSIONS = 20
 LIVE_SESSIONS = 60
 
@@ -280,7 +291,10 @@ def audit(date: str, tv_export: str | None = None,
         # travels in the heartbeat and the audit refuses it.
         tf = hb.get("timeframe")
         eth = hb.get("eth_bars")
-        rep.facts["chart"] = {"timeframe": tf, "eth_bars": eth}
+        rep.facts["chart"] = {k: hb.get(k) for k in
+                              ("timeframe", "eth_bars", "chart_standard",
+                               "session_type", "tickerid", "intrabar_calcs",
+                               "initial_capital")}
         rep.check("the chart is on the 5-minute timeframe",
                   None if tf is None else tf == "5",
                   f"timeframe={tf!r}" if tf is not None else
@@ -291,6 +305,7 @@ def audit(date: str, tv_export: str | None = None,
                   f"sessions ~5 hours late" if eth else
                   ("" if eth == 0 else
                    "the heartbeat carries no ETH count (pre-r3 build)"))
+        _chart_identity_checks(rep, hb)
 
     # -- A. structure --------------------------------------------------------
     rep.check("one entry signal at most (frozen spec B: one trade/day)",
@@ -440,6 +455,99 @@ def audit(date: str, tv_export: str | None = None,
 # payload arrived that the strategy should never have sent, or arrived too late
 # to act on, and the session is not clean.
 BENIGN_REJECTIONS = ("duplicate signal_id", "duplicate fill signal_id")
+
+
+def load_pin() -> dict | None:
+    if not os.path.exists(CHART_PIN):
+        return None
+    try:
+        with open(CHART_PIN) as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def pin_chart(date: str) -> dict:
+    """Record the chart identity observed on a session as the expected one.
+
+    Deliberately a separate, manual act. `tickerid` cannot be hard-coded — what
+    a back-adjusted continuous NQ1! chart reports is not verified — so the only
+    honest control is: confirm the chart once, pin what it said, and break on
+    any later change. Pinning the wrong chart pins the wrong chart; that is why
+    it is an explicit command and not a default.
+    """
+    hb = [s for s in load_signals(date) if s["event"] == SUMMARY_EVENT]
+    if not hb:
+        raise SystemExit(f"no SESSION_SUMMARY heartbeat for {date}; nothing to "
+                         f"pin. Pin from a session the strategy actually ran.")
+    pin = {k: hb[0].get(k) for k in ("tickerid", "session_type", "timeframe",
+                                     "chart_standard")}
+    pin["pinned_from"] = date
+    pin["pinned_at"] = utcnow()
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(CHART_PIN, "w") as fh:
+        json.dump(pin, fh, indent=2)
+    return pin
+
+
+def _chart_identity_checks(rep: Report, hb: dict) -> None:
+    """R10-R13. Each closes a way for a wrong chart to look right everywhere else."""
+    # R10 — synthetic OHLC. A non-standard chart reports the correct symbol,
+    # build, timeframe and session while feeding the emulator calculated prices,
+    # so fills would be against prices that never traded.
+    std = hb.get("chart_standard")
+    rep.check("the chart is a standard candlestick chart",
+              None if std is None else std is True,
+              "non-standard chart types (Heikin-Ashi, Renko, Range, Kagi) feed "
+              "SYNTHETIC OHLC to the broker emulator"
+              if std is False else
+              ("" if std else "the heartbeat carries no chart type"))
+
+    # R11 — asserted session identity, not inferred from the absence of bars.
+    sess = hb.get("session_type")
+    rep.check("the chart declares the expected session",
+              None if sess is None else sess == EXPECTED_SESSION,
+              f"chart says {sess!r}, expected {EXPECTED_SESSION!r}"
+              if sess is not None else
+              "the heartbeat carries no session identity")
+
+    # R12 — the ticker construction, pinned rather than guessed.
+    pin = load_pin()
+    tid = hb.get("tickerid")
+    if pin is None:
+        rep.check("the chart construction is pinned", False,
+                  "no chart pin recorded. Confirm the chart is the intended "
+                  "back-adjusted standard RTH series, then run "
+                  "`daily_audit.py --pin-chart <date>`. Until then the audit "
+                  "cannot tell a back-adjusted continuous series from an "
+                  "unadjusted one, and forward sessions have no reference "
+                  "to catch it."
+                  + (f" This session reported tickerid={tid!r}." if tid else ""))
+    else:
+        rep.facts["chart_pin"] = pin.get("tickerid")
+        rep.check("the chart construction matches the pin",
+                  None if tid is None else tid == pin.get("tickerid"),
+                  f"chart says {tid!r}, pinned {pin.get('tickerid')!r} "
+                  f"(from {pin.get('pinned_from')})"
+                  if tid is not None else
+                  "the heartbeat carries no ticker id")
+
+    # R13 — Strategy Properties are snapshot into the alert alongside the
+    # script, and BUILD_ID covers the script only.
+    intrabar = hb.get("intrabar_calcs")
+    rep.check("calc_on_every_tick was not overridden",
+              None if intrabar is None else intrabar == 0,
+              f"{intrabar} intrabar calculations — the script declares "
+              f"calc_on_every_tick = false, so this must be 0"
+              if intrabar else
+              ("" if intrabar == 0 else
+               "the heartbeat carries no intrabar count"))
+    cap = hb.get("initial_capital")
+    rep.check("initial capital was not overridden",
+              None if cap is None else abs(float(cap) - EXPECTED_CAPITAL) < 1,
+              f"{cap} vs the declared {EXPECTED_CAPITAL:.0f}"
+              if cap is not None else
+              "the heartbeat carries no initial capital")
 
 
 def _rejection_checks(rep: Report, date: str) -> None:
@@ -743,12 +851,19 @@ def main(argv: list[str]) -> int:
                     help="audit without appending to the session log")
     ap.add_argument("--catch-up", action="store_true",
                     help="audit every weekday since the last audited session")
+    ap.add_argument("--pin-chart", metavar="DATE",
+                    help="record the chart identity from a session as the "
+                         "expected one (confirm the chart first)")
     ap.add_argument("--reset-streak", metavar="REASON",
                     help="restart the validation count from zero, on the record")
     ap.add_argument("--mark-holiday", metavar="DATE",
                     help="assert a date was not a trading session (excluded "
                          "from the streak; use only for real market holidays)")
     args = ap.parse_args(argv)
+
+    if args.pin_chart:
+        print(json.dumps(pin_chart(resolve_date(args.pin_chart)), indent=2))
+        return 0
 
     if args.reset_streak:
         print(json.dumps(reset_streak(args.reset_streak), indent=2))

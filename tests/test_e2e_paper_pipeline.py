@@ -74,6 +74,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         env = {**os.environ, "NQ_PAPER_DIR": tmp,
                "NQ_PAPER_CONTRACT": "MNQ", "NQ_PAPER_QTY": "1"}
+        os.makedirs(tmp, exist_ok=True)
+        json.dump({"tickerid": "CME_MINI:NQ1!", "session_type": "regular",
+                   "timeframe": "5", "chart_standard": True,
+                   "pinned_from": "setup"},
+                  open(os.path.join(tmp, "chart_pin.json"), "w"))
         proc = subprocess.Popen([sys.executable, EXEC, "serve", "--port", str(PORT)],
                                 env=env, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
@@ -162,6 +167,9 @@ def main() -> int:
                                "event": "SESSION_SUMMARY", "direction": side,
                                "event_time": stamp(0), "traded": True,
                                "timeframe": "5", "eth_bars": 0,
+                               "chart_standard": True, "session_type": "regular",
+                               "tickerid": "CME_MINI:NQ1!", "intrabar_calcs": 0,
+                               "initial_capital": 1000000.0,
                                "chart_config_ok": True,
                                "entry": float(trade["entry"]),
                                "stop": float(trade["stop"]),

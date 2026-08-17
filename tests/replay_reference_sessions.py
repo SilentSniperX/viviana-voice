@@ -42,6 +42,10 @@ import paper_executor as PE                                       # noqa: E402
 
 CANONICAL = os.path.join(REPO, "reference", "canonical_orb_trades.csv")
 BUILD = PE.expected_build_id()
+import json as _json
+_json.dump({"tickerid": "CME_MINI:NQ1!", "session_type": "regular",
+            "timeframe": "5", "chart_standard": True, "pinned_from": "setup"},
+           open(DA.CHART_PIN, "w"))
 
 
 def payloads(t: dict) -> tuple[list[dict], list[dict]]:
@@ -63,7 +67,10 @@ def payloads(t: dict) -> tuple[list[dict], list[dict]]:
         sig(entry_evt, entry=entry, stop=stop),
         sig(exit_evt, entry=entry, stop=stop, exit=exit_px),
         sig("SESSION_SUMMARY", entry=entry, stop=stop, exit=exit_px, traded=True,
-            timeframe="5", eth_bars=0, chart_config_ok=True),
+            timeframe="5", eth_bars=0, chart_standard=True,
+            session_type="regular", tickerid="CME_MINI:NQ1!",
+            intrabar_calcs=0, initial_capital=1000000.0,
+            chart_config_ok=True),
     ]
     fill = lambda evt, px, pos: {
         "strategy_version": "nq_orb_s5b_v1", "build_id": BUILD,

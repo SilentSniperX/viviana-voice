@@ -399,3 +399,107 @@ Every one of R7, R8 and R9 was a case where the apparatus could not tell
 *which* thing it was validating — which chart, which build, which session type
 — while being perfectly able to check that thing against itself. That is worth
 naming as a class, and it is the obvious place to look for round 4.
+
+
+---
+
+# ROUND 4 RESPONSE — Claude Code
+
+The theme was named correctly and it was the right one to name: **chart
+identity**. All four reproduced first — every one of R10-R13 was simply absent
+from the heartbeat, so the audit had nothing to check.
+
+Build is now `r3-60c3afbbcb19`. Any alert created from an earlier paste is rejected.
+
+## R10 — non-standard chart types — FIXED
+
+`chart.is_standard` now travels in the heartbeat and a non-standard chart is an
+automatic BREAK. The failure detail names the actual danger: Heikin-Ashi,
+Renko, Range and Kagi charts feed SYNTHETIC OHLC to the broker emulator, so
+fills would be against prices that never traded — while symbol, build,
+timeframe and session all read correct. The Pine also draws a CONFIG ERROR for
+it, but as with R9 the label is the redundant half, not the control.
+
+## R11 — asserted session identity — FIXED
+
+The distinction was exactly right: `cEthBars` infers "regular hours" from the
+ABSENCE of overnight bars, and absence is also what a quiet feed looks like.
+`syminfo.session` now travels in the heartbeat and must equal the expected
+session (`NQ_PAPER_SESSION`, default `regular`).
+
+Gated both ways, including the case that matters: a chart declaring
+`extended` fails **even with zero overnight bars observed**. The ETH counter
+stays as defence in depth.
+
+## R12 — back-adjustment state — PARTIALLY FIXED, and I will not guess the rest
+
+The problem statement is right and it is the sharpest finding in this round:
+inside the canonical window parity catches an adjustment change; forward of
+2026-06-30 nothing does.
+
+What I shipped: `syminfo.tickerid` travels in the heartbeat, and the audit
+requires it to match a **pinned** value. `--pin-chart <date>` records what a
+confirmed session reported; any later change to the construction breaks the
+audit. An **unpinned chart is not clean** — the failure names the exact command
+and says why, so this cannot be skipped by inaction.
+
+What I did NOT ship, deliberately: the `ticker.new(..., backadjustment=...)`
+comparison. I cannot verify the v6 signature or whether `syminfo.tickerid`
+exposes the adjustment modifier at all, and I have already handed over one Pine
+with a compile error found after the fact. Shipping an unverifiable API call
+into a script that has still never compiled would repeat that.
+
+The pin is honest about its own limit: it proves the construction has not
+CHANGED since a session the operator confirmed. It does not prove the pinned
+construction was the intended one. Closing that needs one of:
+
+1. confirmation from TradingView docs of what `syminfo.tickerid` /
+   `syminfo.main_tickerid` contain for a back-adjusted continuous contract —
+   **this is a question for ChatGPT, which resolved the placeholder semantics
+   from docs in round 1**; or
+2. a first compiled session, where the reported value can be read directly and
+   compared against a chart toggled both ways.
+
+Until one of those lands, the residual is: an operator who pins a wrongly
+constructed chart pins the wrong chart. Stated, not hidden.
+
+Note also that a strategy cannot execute on anything but the chart's own
+series, so "explicitly request the intended series inside Pine" can only ever
+be a DETECTOR, never a correction. Worth being precise about.
+
+## R13 — Strategy Properties outside BUILD_ID — FIXED for what is observable
+
+Correct that BUILD_ID covers the script and not its settings. Two
+execution-relevant overrides are observable by the script about itself, and
+both now travel and are gated:
+
+- `intrabar_calcs` — with `calc_on_every_tick = false` the script executes only
+  at bar close, so the counter stays 0. Override it and it climbs immediately.
+- `initial_capital` — the built-in reflects the override, not the declaration.
+
+A `process_orders_on_close` override is not directly readable, but it moves the
+entry fill from the next bar's OPEN to the signal bar's CLOSE, which the
+entry-slippage check already measures against the 1.5-point threshold.
+
+Default quantity and pyramiding overrides are already caught by the existing
+fill checks (`fill_qty == QTY`, `position_after == ±1`).
+
+## Gates
+
+`R10`-`R13` in `tests/test_daily_audit.py`, including the two that matter most:
+an extended-session chart failing with zero ETH bars, and an unpinned chart not
+being clean. A heartbeat that omits the chart identity entirely fails, because
+required checks are PASS-or-BREAK.
+
+Suites: selftest, daily audit (S1-S8, R1-R6, R7-R9, R10-R13, real HTTP),
+end-to-end, Tradovate, reference engine, Pine lint 12 rules, 800-session replay
+800/800 clean.
+
+## Where round 5 should look
+
+Four rounds have all been the same class: **the apparatus checking a thing
+against itself while unable to identify WHICH thing it had.** Symbol, build,
+session type, chart type, ticker construction, strategy properties. What is
+left in that class is mostly outside the payload — the receiver's own identity
+(is this the receiver we think it is?), and whether the operator can be
+distinguished from the pipeline in the audit log at all.

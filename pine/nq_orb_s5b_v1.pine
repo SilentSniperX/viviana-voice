@@ -114,7 +114,7 @@ isSessionLast   = nyMinute >= FINAL_BAR_MIN or session.islastbar_regular
 //
 // tests/lint_pine.py recomputes this from the file contents and FAILS if the
 // script changed without restamping. Use tests/stamp_build_id.py to update it.
-BUILD_ID        = "r3-3585f3ec73da"
+BUILD_ID        = "r3-60c3afbbcb19"
 
 // --- chart configuration, reported not just displayed -------------------------
 // The red CONFIG ERROR label only helps if a human is looking at the chart. An
@@ -127,6 +127,42 @@ BUILD_ID        = "r3-3585f3ec73da"
 var int cEthBars = 0
 if barstate.isconfirmed and (nyMinute >= 1080 or nyMinute < 540)
     cEthBars += 1
+
+// --- chart IDENTITY, asserted rather than inferred -----------------------------
+// `cEthBars` infers "regular hours" from the ABSENCE of overnight bars. Absence
+// is weak evidence: it is also what a quiet feed looks like. These are positive
+// assertions from the chart itself, and each closes a way for a wrong chart to
+// look right on every other axis.
+//
+// chart.is_standard — a Heikin-Ashi, Renko, Range, Kagi or Point-and-Figure
+//   chart reports the correct symbol, build, timeframe and session while
+//   feeding the strategy SYNTHETIC OHLC. TradingView documents that the broker
+//   emulator uses the chart's calculated prices on such charts, so fills would
+//   be against prices that never traded.
+// syminfo.session — the chart's DECLARED session, so "regular trading hours"
+//   is an identity the chart states, not something inferred from silence.
+// syminfo.tickerid — carries the ticker construction. Whether it exposes the
+//   continuous-contract back-adjustment state is NOT verified here; it is
+//   reported so the operator can PIN it after the first compiled session, and
+//   any later change to the chart's construction then breaks the audit.
+chartStandard   = chart.is_standard
+chartSession    = syminfo.session
+chartTickerId   = syminfo.tickerid
+
+// --- strategy-properties overrides --------------------------------------------
+// A TradingView alert snapshots the script AND its settings. BUILD_ID covers the
+// script only, so an operator can run the right build with altered Strategy
+// Properties. These two are the execution-relevant overrides that the script can
+// observe about itself:
+//   cIntrabar — with `calc_on_every_tick = false` the script only executes at bar
+//     close, so this stays 0. Override it to true and it climbs immediately.
+//   strategy.initial_capital — reflects the override, not the declaration.
+// A `process_orders_on_close` override is not directly readable, but it moves
+// the entry fill from the next bar's OPEN to the signal bar's CLOSE, which the
+// audit's entry-slippage check already measures.
+var int cIntrabar = 0
+if barstate.isrealtime and not barstate.isconfirmed
+    cIntrabar += 1
 
 // --- fill-alert payload -------------------------------------------------------
 // Placeholders are expanded by TradingView at FILL time, so these carry the
@@ -547,8 +583,13 @@ f_payload(string evt, string dir, float px, float stp, float xpx) =>
      // instead of trusting an operator to notice a label.
      ',"timeframe":"'   + timeframe.period + '"' +
      ',"eth_bars":'     + str.tostring(cEthBars) +
-     ',"chart_config_ok":' + ((timeframe.period == "5" and cEthBars == 0)
-                              ? "true" : "false") +
+     ',"chart_standard":' + (chartStandard ? "true" : "false") +
+     ',"session_type":"' + chartSession + '"' +
+     ',"tickerid":"'    + chartTickerId + '"' +
+     ',"intrabar_calcs":' + str.tostring(cIntrabar) +
+     ',"initial_capital":' + str.tostring(strategy.initial_capital) +
+     ',"chart_config_ok":' + ((timeframe.period == "5" and cEthBars == 0
+                               and chartStandard) ? "true" : "false") +
      ',"entry":'        + (na(px)  ? "null" : str.tostring(px)) +
      ',"stop":'         + (na(stp) ? "null" : str.tostring(stp)) +
      // The strategy's INTENDED exit price. Without it a hold-to-close exit has
@@ -689,6 +730,14 @@ if wrongTimeframe and barstate.islast
               "Parity is not valid on this chart.",
               style = label.style_label_down, color = color.new(color.orange, 0),
               textcolor = color.black, size = size.normal)
+if not chart.is_standard and barstate.islast
+    label.new(bar_index, high,
+              "CONFIG ERROR\nnon-standard chart type\n" +
+              "Heikin-Ashi / Renko / Range / Kagi feed SYNTHETIC OHLC to the\n" +
+              "broker emulator. Fills would be against prices that never\n" +
+              "traded. Use a standard candlestick chart.",
+              style = label.style_label_down, color = color.new(color.red, 0),
+              textcolor = color.white, size = size.normal)
 if cEthBars > 0 and barstate.islast
     label.new(bar_index, low,
               "CONFIG ERROR\nextended-hours chart (" + str.tostring(cEthBars) +
